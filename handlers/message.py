@@ -1,4 +1,5 @@
-from telegram import Update
+
+from telegram import Update, Message
 from telegram.ext import ContextTypes
 from services.stock_analyzer import get_stock_data, get_stock_data_fallback
 from services.perplexity import analyze_stock
@@ -22,7 +23,25 @@ EMOJIS = {
 }
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().upper()
+    msg: Message = update.message
+    # 1. Solo texto
+    if not msg.text:
+        await msg.reply_text("⚠️ Solo se aceptan mensajes de texto con el símbolo bursátil (ej: IAM.SN, IPSA, dólar). No envíes imágenes, archivos ni GIFs.")
+        return
+
+    text_raw = msg.text.strip()
+    text = text_raw.upper()
+    # 2. Mensaje vacío o muy corto
+    if not text or len(text) < 2:
+        await msg.reply_text("Por favor, envía el símbolo bursátil (ej: IAM.SN, IPSA, dólar).")
+        return
+
+    # 3. Validar símbolo (solo letras, números, punto, guion, igual, ^)
+    import re
+    if not re.match(r'^[A-Z0-9\.\-=^]{2,}$', text) and text not in KEYWORD_SYMBOLS:
+        await msg.reply_text("Símbolo inválido. Ejemplo válido: IAM.SN, IPSA, dólar.")
+        return
+
     symbol = KEYWORD_SYMBOLS.get(text, text)
     timestamp = datetime.datetime.now().strftime("%H:%M")
     fuente = "BrainData"  # Default, cambiar según fallback
@@ -51,6 +70,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 | {rsi} | {macd} |
 """
         ia = await analyze_stock(symbol, data)
-        await update.message.reply_text(f"{tabla}\n**IA:** {ia}", parse_mode="Markdown")
+        await msg.reply_text(f"{tabla}\n**IA:** {ia}", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e) if str(e) else 'No cotizando'}")
+        await msg.reply_text(f"❌ Error: {str(e) if str(e) else 'No cotizando'}")
