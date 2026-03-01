@@ -19,7 +19,9 @@ async def stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tabla = f"""**{symbol}**
 | Precio | ${indicadores['precio_actual']}
 | 24h | {indicadores['cambio_24h']}%
+| 7d | {indicadores['cambio_7d']}%
 | RSI | {indicadores['rsi']}
+| MACD | {indicadores['macd']}
 | Vol | {indicadores['volumen']:,}"""
         
         await update.message.reply_text(f"{tabla}\n\n**IA:**\n{analisis}")
