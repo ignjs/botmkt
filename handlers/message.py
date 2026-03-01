@@ -38,11 +38,24 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 3. Validar símbolo (solo letras, números, punto, guion, igual, ^)
     import re
-    if not re.match(r'^[A-Z0-9\.\-=^]{2,}$', text) and text not in KEYWORD_SYMBOLS:
+    if text in KEYWORD_SYMBOLS:
+        symbol = KEYWORD_SYMBOLS[text]
+    elif re.match(r'^[A-Z0-9\.\-=^]{2,}$', text):
+        # Validar existencia real del símbolo en yfinance antes de seguir
+        import yfinance as yf
+        ticker = yf.Ticker(text)
+        try:
+            hist = ticker.history(period="1d")
+            if hist.empty:
+                await msg.reply_text("El símbolo no existe o no está cotizando. Ejemplo válido: IAM.SN, IPSA, dólar.")
+                return
+        except Exception:
+            await msg.reply_text("El símbolo no existe o no está cotizando. Ejemplo válido: IAM.SN, IPSA, dólar.")
+            return
+        symbol = text
+    else:
         await msg.reply_text("Símbolo inválido. Ejemplo válido: IAM.SN, IPSA, dólar.")
         return
-
-    symbol = KEYWORD_SYMBOLS.get(text, text)
     timestamp = datetime.datetime.now().strftime("%H:%M")
     fuente = "BrainData"  # Default, cambiar según fallback
 
