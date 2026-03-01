@@ -1,7 +1,6 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import talib
 import time
 import logging
 from typing import Dict, Optional
@@ -20,11 +19,25 @@ async def get_stock_data(symbol: str, retries: int = 3) -> Dict:
                 hist = ticker.history(period="1mo", auto_adjust=True, prepost=False)
                 if hist.empty or len(hist) < 14:
                     raise ValueError(f"No data para {symbol} (delisted/vacío)")
-                close = hist['Close'].values
-                rsi = talib.RSI(close, timeperiod=14)[-1]
-                macd_line, signal_line, _ = talib.MACD(close, fastperiod=12, slowperiod=26)
-                precio_actual = round(float(close[-1]), 2)
-                # Simulación de compra/venta/spread (mejorable con Level2)
+                close = hist['Close']
+                # RSI manual
+                delta = close.diff()
+                up = delta.clip(lower=0)
+                down = -1 * delta.clip(upper=0)
+                roll_up = up.rolling(14).mean()
+                roll_down = down.rolling(14).mean()
+                rs = roll_up / roll_down
+                rsi = 100 - (100 / (1 + rs))
+                rsi_val = round(float(rsi.iloc[-1]), 2)
+
+                # MACD manual
+                exp12 = close.ewm(span=12, adjust=False).mean()
+                exp26 = close.ewm(span=26, adjust=False).mean()
+                macd_line = exp12 - exp26
+                signal_line = macd_line.ewm(span=9, adjust=False).mean()
+                macd_val = round(float(macd_line.iloc[-1]), 4)
+
+                precio_actual = round(float(close.iloc[-1]), 2)
                 compra = precio_actual
                 venta = round(compra * 1.004, 2)  # Spread 0.4% simulado
                 spread = round(venta - compra, 2)
@@ -33,10 +46,10 @@ async def get_stock_data(symbol: str, retries: int = 3) -> Dict:
                     'compra': compra,
                     'venta': venta,
                     'spread': spread,
-                    'cambio_24h': round(((close[-1] - close[-2]) / close[-2]) * 100, 2),
-                    'cambio_7d': round(((close[-1] - close[-7]) / close[-7]) * 100, 2) if len(close) >= 8 else 0,
-                    'rsi': round(float(rsi), 2),
-                    'macd': round(float(macd_line[-1]), 4),
+                    'cambio_24h': round(((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]) * 100, 2),
+                    'cambio_7d': round(((close.iloc[-1] - close.iloc[-7]) / close.iloc[-7]) * 100, 2) if len(close) >= 8 else 0,
+                    'rsi': rsi_val,
+                    'macd': macd_val,
                     'volumen': int(hist['Volume'].iloc[-1]),
                     'symbol': symbol
                 }
