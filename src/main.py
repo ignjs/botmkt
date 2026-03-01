@@ -1,16 +1,13 @@
 import logging
 from src.config import Config
-from telegram.ext import Application, CommandHandler
-from src.handlers import start, stock_cmd
+from telegram.ext import Application, MessageHandler, filters
+from src.handlers.message import message_handler
 
 logging.basicConfig(level=Config.LOG_LEVEL)
 
 def main():
     app = Application.builder().token(Config.TELEGRAM_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stock", stock_cmd))
-    
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     print("🤖 Bot iniciado - Polling...")
     app.run_polling()
 

@@ -6,7 +6,7 @@ BotMKT es una solución integral que combina un bot de Telegram y una API REST p
 ---
 
 ## Características Principales
-- **Bot de Telegram**: Consulta de acciones y análisis financiero mediante comandos como `/stock`.
+- **Bot de Telegram**: Consulta de acciones y análisis financiero simplemente enviando el símbolo (ej: `IAM.SN`, `IPSA`, `dólar`).
 - **API REST (FastAPI)**: Endpoints para análisis de acciones y health check.
 - **Indicadores Técnicos**: RSI, MACD, variaciones porcentuales, volumen y volatilidad.
 - **Análisis con IA**: Generación de análisis de tendencia, decisión (comprar/vender/mantener), riesgo y sugerencia de stop-loss usando modelos de lenguaje.
@@ -23,7 +23,7 @@ api/endpoints.py        # Endpoints de la API REST
 src/
   main.py               # Inicialización del bot
   config/config.py      # Configuración y variables de entorno
-  handlers/commands.py  # Handlers de comandos del bot
+   handlers/message.py   # Handler conversacional (mensaje=análisis)
   services/
     perplexity.py       # Servicio de análisis IA
     stock_analyzer.py   # Servicio de indicadores técnicos
@@ -49,8 +49,9 @@ src/
 4. **Configura el archivo `.env` con tus claves:**
    ```env
    TELEGRAM_TOKEN=tu_token_telegram
-   OPENAI_API_KEY=tu_api_key_openai
    PERPLEXITY_API_KEY=tu_api_key_perplexity
+   BRAIN_API_KEY=tu_api_key_braindata
+   ALPHA_KEY=tu_api_key_alpha
    API_HOST=127.0.0.1
    API_PORT=8000
    LOG_LEVEL=INFO
@@ -59,14 +60,28 @@ src/
 ---
 
 ## Uso
+
 ### Bot de Telegram
 Ejecuta el bot:
 ```bash
 python src/main.py
 ```
-Comandos disponibles:
-- `/start`: Mensaje de bienvenida
-- `/stock <SÍMBOLO>`: Analiza una acción (ejemplo: `/stock IAM.SN`)
+
+**UX Conversacional:**
+- Envía un mensaje con el símbolo o keyword (ej: `IAM.SN`, `IPSA`, `dólar`)
+- El bot responde con análisis financiero, tabla markdown y decisión IA
+
+**Ejemplo:**
+```
+Usuario: IAM.SN
+Bot:
+📈 **IAM.SN** (BrainData 20:09)
+| Compra 🟢 | Venta 🔴 | Spread ➖ | Vol 💸 |
+| $12,500 | $12,550 | $50 | 1,200,000 |
+| RSI | MACD |
+| 48.2 | 0.0123 |
+**IA:** Mantener. Riesgo 4/10. Stop-loss $12,200
+```
 
 ### API REST
 Ejecuta la API:
