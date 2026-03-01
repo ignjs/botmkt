@@ -1,11 +1,9 @@
+
 from telegram import Update, Message
-from telegram.ext import ContextTypes, filters
+from telegram.ext import ContextTypes
 from services.stock_analyzer import get_stock_data, get_stock_data_fallback
 from services.perplexity import analyze_stock
 import datetime
-from config import Config
-
-ALLOWED_USER_ID = Config.ALLOWED_USER_ID  # ← TU ID
 
 # Mapeo de keywords a símbolos
 KEYWORD_SYMBOLS = {
@@ -24,50 +22,35 @@ EMOJIS = {
     "vol": "💸",
 }
 
-
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Solo responde a TU ID
-    if update.effective_user.id != ALLOWED_USER_ID:
-        return  # Ignora silenciosamente
-
     msg: Message = update.message
     # 1. Solo texto
     if not msg.text:
-        await msg.reply_text(
-            "⚠️ Solo se aceptan mensajes de texto con el símbolo bursátil (ej: IAM.SN, IPSA, dólar). No envíes imágenes, archivos ni GIFs."
-        )
+        await msg.reply_text("⚠️ Solo se aceptan mensajes de texto con el símbolo bursátil (ej: IAM.SN, IPSA, dólar). No envíes imágenes, archivos ni GIFs.")
         return
 
     text_raw = msg.text.strip()
     text = text_raw.upper()
     # 2. Mensaje vacío o muy corto
     if not text or len(text) < 2:
-        await msg.reply_text(
-            "Por favor, envía el símbolo bursátil (ej: IAM.SN, IPSA, dólar)."
-        )
+        await msg.reply_text("Por favor, envía el símbolo bursátil (ej: IAM.SN, IPSA, dólar).")
         return
 
     # 3. Validar símbolo (solo letras, números, punto, guion, igual, ^)
     import re
-
     if text in KEYWORD_SYMBOLS:
         symbol = KEYWORD_SYMBOLS[text]
-    elif re.match(r"^[A-Z0-9\.\-=^]{2,}$", text):
+    elif re.match(r'^[A-Z0-9\.\-=^]{2,}$', text):
         # Validar existencia real del símbolo en yfinance antes de seguir
         import yfinance as yf
-
         ticker = yf.Ticker(text)
         try:
             hist = ticker.history(period="1d")
             if hist.empty:
-                await msg.reply_text(
-                    "El símbolo no existe o no está cotizando. Ejemplo válido: IAM.SN, IPSA, dólar."
-                )
+                await msg.reply_text("El símbolo no existe o no está cotizando. Ejemplo válido: IAM.SN, IPSA, dólar.")
                 return
         except Exception:
-            await msg.reply_text(
-                "El símbolo no existe o no está cotizando. Ejemplo válido: IAM.SN, IPSA, dólar."
-            )
+            await msg.reply_text("El símbolo no existe o no está cotizando. Ejemplo válido: IAM.SN, IPSA, dólar.")
             return
         symbol = text
     else:

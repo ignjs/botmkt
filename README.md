@@ -49,8 +49,6 @@ services/
    ```env
    TELEGRAM_TOKEN=tu_token_telegram
    PERPLEXITY_API_KEY=tu_api_key_perplexity
-   BRAIN_API_KEY=tu_api_key_braindata
-   ALPHA_KEY=tu_api_key_alpha
    API_HOST=127.0.0.1
    API_PORT=8000
    LOG_LEVEL=INFO
