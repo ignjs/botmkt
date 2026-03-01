@@ -16,7 +16,6 @@ BotMKT es una solución integral que combina un bot de Telegram y una API REST p
 ---
 
 ## Estructura del Proyecto
-```
 bot.py                  # Script principal del bot de Telegram
 requirements.txt        # Dependencias del proyecto
 api/endpoints.py        # Endpoints de la API REST
@@ -27,6 +26,17 @@ src/
   services/
     perplexity.py       # Servicio de análisis IA
     stock_analyzer.py   # Servicio de indicadores técnicos
+```
+```
+requirements.txt        # Dependencias del proyecto
+api/endpoints.py        # Endpoints de la API REST
+main.py                 # Inicialización del bot
+config/config.py        # Configuración y variables de entorno
+handlers/
+   message.py            # Handler conversacional (mensaje=análisis)
+services/
+   perplexity.py         # Servicio de análisis IA
+   stock_analyzer.py     # Servicio de indicadores técnicos
 ```
 
 ---
@@ -62,9 +72,10 @@ src/
 ## Uso
 
 ### Bot de Telegram
+
 Ejecuta el bot:
 ```bash
-python src/main.py
+python main.py
 ```
 
 **UX Conversacional:**
@@ -95,4 +106,4 @@ Endpoints:
 ---
 
 ## Créditos y Licencia
-Desarrollado por Ignacio. Uso educativo y personal. Puedes modificar y adaptar el código según tus necesidades.
+Desarrollado por Ignjs. Uso educativo y personal. Puedes modificar y adaptar el código según tus necesidades.
