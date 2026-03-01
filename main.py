@@ -1,7 +1,7 @@
 import logging
-from src.config import Config
+from config import Config
 from telegram.ext import Application, MessageHandler, filters
-from src.handlers.message import message_handler
+from handlers.message import message_handler
 
 logging.basicConfig(level=Config.LOG_LEVEL)
 

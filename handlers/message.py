@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from src.services.stock_analyzer import get_stock_data, get_stock_data_fallback
-from src.services.perplexity import analyze_stock
+from services.stock_analyzer import get_stock_data, get_stock_data_fallback
+from services.perplexity import analyze_stock
 import datetime
 
 # Mapeo de keywords a símbolos

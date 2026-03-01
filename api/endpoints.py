@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from src.services.stock_analyzer import get_stock_data
-from src.services.perplexity import analyze_stock
+from services.stock_analyzer import get_stock_data
+from services.perplexity import analyze_stock
 
 app = FastAPI(title="StockBot API")
 

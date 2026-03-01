@@ -1,5 +1,5 @@
 from openai import OpenAI
-from src.config import Config
+from config import Config
 
 client = OpenAI(
     api_key=Config.PERPLEXITY_API_KEY,
