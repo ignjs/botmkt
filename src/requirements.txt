@@ -1,7 +1,9 @@
 python-telegram-bot==20.7
 yfinance==0.2.40
+pandas==2.2.2
 numpy==1.26.4
-pandas==2.1.4  # ✅ Compatible Python 3.13
-openai==1.35.3
+#ta-lib==0.4.28
 python-dotenv==1.0.1
-requests==2.31.0
+openai==1.35.3
+fastapi==0.110.0
+uvicorn==0.29.0
