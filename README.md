@@ -6,21 +6,45 @@ BotMKT es una solución integral que combina un bot de Telegram y una API REST p
 ---
 
 ## Características Principales
-- **Bot de Telegram**: Consulta de acciones y análisis financiero simplemente enviando el símbolo (ej: `IAM.SN`, `IPSA`, `dólar`).
+- **Bot de Telegram**: Consulta de acciones, gestión de cartera y análisis financiero enviando el símbolo, comandos de cartera o texto natural (ej: `+AAPL 10 170`, `/cartera`, `analiza mi cartera`).
 - **API REST (FastAPI)**: Endpoints para análisis de acciones y health check.
 - **Indicadores Técnicos**: RSI, MACD, variaciones porcentuales, volumen y volatilidad.
 - **Análisis con IA**: Generación de análisis de tendencia, decisión (comprar/vender/mantener), riesgo y sugerencia de stop-loss usando modelos de lenguaje.
 - **Configuración Segura**: Uso de variables de entorno para claves y tokens sensibles.
 - **Código Modular**: Separación clara entre configuración, handlers, servicios y API.
 
+**Comandos de Cartera:**
+- `+AAPL 10 170` → Agrega/actualiza posición (símbolo, cantidad, precio compra)
+- `-AAPL` → Elimina posición
+- `/cartera` → Muestra snapshot de tu cartera
+- `analiza mi cartera` → Análisis IA de tu portafolio
+
+**Ejemplo UX:**
+```
+👤 +IAM.SN 50 12500
+🤖 ✅ IAM.SN agregado (50 @ 12,500)
+
+👤 /cartera
+🤖 📊 **Tu cartera** (Valor: $750k)
+| Símbolo | Cant | Precio | Valor | P/L |
+| IAM.SN  |  50  | 12,550 | 627k  | +0.4% |
+| AAPL    |  10  | 210    | 2.1k  | +4.5% |
+
+👤 analiza mi cartera
+🤖 🎯 **Análisis IA cartera**:
+Exposición Chile 99%. Riesgo bajo. Mantener...
+```
 ---
 
-## Estructura del Proyecto
-```
-requirements.txt        # Dependencias del proyecto
-api/endpoints.py        # Endpoints de la API REST
-main.py                 # Inicialización del bot
-config/config.py        # Configuración y variables de entorno
+## Migración y uso con PostgreSQL
+
+1. Crea una base de datos PostgreSQL local o en Railway.
+2. Configura tu `.env`:
+   ```env
+   DATABASE_URL=postgresql://usuario:password@localhost:5432/tu_db
+   ```
+3. El bot crea las tablas automáticamente al iniciar.
+4. Para migrar a Railway/Postgres cloud, solo cambia la URL en `.env`.
 handlers/
    message.py            # Handler conversacional (mensaje=análisis)
 services/

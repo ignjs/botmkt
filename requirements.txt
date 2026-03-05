@@ -1,3 +1,5 @@
+# PostgreSQL async driver
+asyncpg==0.29.0
 python-telegram-bot==20.7
 yfinance==1.2.0
 pandas==2.2.2
