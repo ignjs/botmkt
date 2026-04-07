@@ -1,11 +1,13 @@
-
-from telegram import Update, Message
-from telegram.ext import ContextTypes
-from services.stock_analyzer import get_stock_data, get_stock_data_fallback
-from services.perplexity import analyze_stock
 import datetime
+import re
 
-# Mapeo de keywords a símbolos
+import yfinance as yf
+from telegram import Message, Update
+from telegram.ext import ContextTypes
+
+from services.perplexity import analyze_stock
+from services.portfolio_service import get_market_data_with_source
+
 KEYWORD_SYMBOLS = {
     "IAM": "IAM.SN",
     "IPSA": "^IPSA",
@@ -13,8 +15,7 @@ KEYWORD_SYMBOLS = {
     "DOLAR": "USDCLP=X",
     "USD": "USDCLP=X",
 }
-
-# Emojis para tabla
+SYMBOL_REGEX = re.compile(r'^[A-Z0-9\.\-=^]{2,}$')
 EMOJIS = {
     "compra": "🟢",
     "venta": "🔴",
@@ -22,27 +23,26 @@ EMOJIS = {
     "vol": "💸",
 }
 
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg: Message = update.message
-    # 1. Solo texto
+
+    if context.user_data.get("investment_profile_flow"):
+        return
+
     if not msg.text:
         await msg.reply_text("⚠️ Solo se aceptan mensajes de texto con el símbolo bursátil (ej: IAM.SN, IPSA, dólar). No envíes imágenes, archivos ni GIFs.")
         return
 
     text_raw = msg.text.strip()
     text = text_raw.upper()
-    # 2. Mensaje vacío o muy corto
     if not text or len(text) < 2:
         await msg.reply_text("Por favor, envía el símbolo bursátil (ej: IAM.SN, IPSA, dólar).")
         return
 
-    # 3. Validar símbolo (solo letras, números, punto, guion, igual, ^)
-    import re
     if text in KEYWORD_SYMBOLS:
         symbol = KEYWORD_SYMBOLS[text]
-    elif re.match(r'^[A-Z0-9\.\-=^]{2,}$', text):
-        # Validar existencia real del símbolo en yfinance antes de seguir
-        import yfinance as yf
+    elif SYMBOL_REGEX.match(text):
         ticker = yf.Ticker(text)
         try:
             hist = ticker.history(period="1d")
@@ -56,15 +56,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text("Símbolo inválido. Ejemplo válido: IAM.SN, IPSA, dólar.")
         return
+
     timestamp = datetime.datetime.now().strftime("%H:%M")
-    fuente = "BrainData"  # Default, cambiar según fallback
 
     try:
-        try:
-            data = await get_stock_data(symbol)
-        except Exception:
-            data = await get_stock_data_fallback(symbol)
-            fuente = "Alpha"
+        data, fuente = await get_market_data_with_source(symbol)
         if not data:
             raise ValueError("No cotizando")
 
