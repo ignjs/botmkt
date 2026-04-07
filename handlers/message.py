@@ -24,6 +24,10 @@ EMOJIS = {
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg: Message = update.message
+
+    if context.user_data.get("investment_profile_flow"):
+        return
+
     # 1. Solo texto
     if not msg.text:
         await msg.reply_text("⚠️ Solo se aceptan mensajes de texto con el símbolo bursátil (ej: IAM.SN, IPSA, dólar). No envíes imágenes, archivos ni GIFs.")

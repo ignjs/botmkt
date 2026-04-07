@@ -1,18 +1,34 @@
+import re
+
 from telegram import Update
 from telegram.ext import ContextTypes
-import re
-from db import add_position, remove_position, get_positions
-from services.portfolio_service import build_portfolio_snapshot
+
+from db import add_position, get_investment_profile, get_positions, remove_position
 from services.perplexity import analyze_portfolio, analyze_stock
+from services.planner import build_weekly_execution_plan
+from services.portfolio_service import build_portfolio_snapshot
 from services.stock_analyzer import get_stock_data, get_stock_data_fallback
 
 SYMBOL_PATTERN = re.compile(r'^(\^[A-Z0-9]{2,}|[A-Z0-9]+(?:\.[A-Z]{1,5})?|[A-Z0-9]+=[A-Z])$')
+PLAN_TRIGGERS = {
+    "plan semanal",
+    "que deberia hacer esta semana",
+    "qué debería hacer esta semana",
+    "dame mi plan de cartera",
+}
+
+
+def _is_weekly_plan_request(text: str) -> bool:
+    normalized = text.strip().lower()
+    return normalized.startswith("/plan_semana") or normalized in PLAN_TRIGGERS
+
 
 async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     user_id = update.effective_user.id
     text = msg.text.strip()
-    # +AAPL 10 170
+    normalized = text.lower()
+
     if text.startswith('+'):
         try:
             parts = text[1:].strip().split()
@@ -27,6 +43,8 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             qty_value = float(qty)
             price_value = float(price)
+            if qty_value <= 0 or price_value <= 0:
+                raise ValueError("Cantidad y precio deben ser mayores a 0")
 
             await add_position(user_id, symbol, qty_value, price_value)
             await msg.reply_text(f"✅ {symbol} agregado ({qty_value:,.2f} @ {price_value:,.2f})")
@@ -34,7 +52,7 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("Formato inválido. Usa: +AAPL 10 170")
         except Exception:
             await msg.reply_text("No pude guardar la posición en este momento. Intenta nuevamente.")
-    # -AAPL
+
     elif text.startswith('-'):
         try:
             symbol = text[1:].strip().upper()
@@ -50,12 +68,27 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("Formato inválido. Usa: -AAPL")
         except Exception:
             await msg.reply_text("Formato inválido. Usa: -AAPL")
-    # /cartera
+
     elif text == '/cartera':
         snap = await build_portfolio_snapshot(user_id)
+        if not snap["detalle"]:
+            await msg.reply_text("No tienes posiciones en tu cartera todavía.")
+            return
         await msg.reply_text(f"📊 **Tu cartera** (Valor: ${snap['valor_total']:,.0f})\n{snap['tabla']}", parse_mode="Markdown")
-    # /analiza | /analiza IAM.SN
-    elif text.lower().startswith('/analiza'):
+
+    elif _is_weekly_plan_request(text):
+        profile = await get_investment_profile(user_id)
+        if not profile:
+            await msg.reply_text(
+                "Primero define tu perfil con `/perfil`. Sin eso, el plan no puede evaluar disciplina ni límites reales.",
+                parse_mode="Markdown",
+            )
+            return
+
+        result = await build_weekly_execution_plan(user_id)
+        await msg.reply_text(result["plan_markdown"], parse_mode="Markdown")
+
+    elif normalized.startswith('/analiza'):
         target = text[8:].strip()
         target_lower = target.lower()
 
@@ -112,5 +145,8 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text(f"🎯 **Análisis IA {symbol}**:\n{ia}", parse_mode="Markdown")
             except Exception as e:
                 await msg.reply_text(f"No pude analizar {symbol}: {str(e) if str(e) else 'No cotizando'}")
+
     else:
-        await msg.reply_text("Comando no reconocido. Usa +AAPL 10 170, -AAPL, /cartera, /analiza o /analiza IAM.SN.")
+        await msg.reply_text(
+            "Comando no reconocido. Usa +AAPL 10 170, -AAPL, /cartera, /analiza, /perfil o /plan_semana."
+        )
