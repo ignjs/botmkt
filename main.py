@@ -4,7 +4,7 @@ import re
 from telegram.ext import Application, MessageHandler, filters
 
 from config import Config
-from db import ensure_schema
+from db import ensure_schema, init_pool
 from handlers.investment_profile import investment_profile_handler
 from handlers.message import message_handler
 from handlers.portfolio import portfolio_handler
@@ -14,9 +14,9 @@ logging.basicConfig(level=Config.LOG_LEVEL)
 
 async def _post_init(_: Application):
     try:
-        await ensure_schema()
+        await init_pool()
     except Exception as exc:
-        logging.warning("No se pudo inicializar el schema de BD al iniciar: %s", exc)
+        logging.warning("No se pudo inicializar el pool de BD al iniciar: %s", exc)
 
 
 def main():

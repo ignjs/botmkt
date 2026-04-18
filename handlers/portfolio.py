@@ -7,6 +7,7 @@ from db import add_position, get_investment_profile, remove_position
 from services.perplexity import analyze_portfolio, analyze_stock
 from services.planner import build_weekly_execution_plan
 from services.portfolio_service import build_portfolio_snapshot, build_stock_analysis_context
+from utils.rate_limiter import ai_limiter
 
 SYMBOL_PATTERN = re.compile(r'^(\^[A-Z0-9]{2,}|[A-Z0-9]+(?:\.[A-Z]{1,5})?|[A-Z0-9]+=[A-Z])$')
 PLAN_TRIGGERS = {
@@ -96,6 +97,13 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if normalized.startswith('/analiza'):
+        allowed, retry_after = ai_limiter.is_allowed(user_id)
+        if not allowed:
+            await msg.reply_text(
+                f"⏳ Demasiadas solicitudes al análisis IA. Espera {retry_after} segundos e intenta de nuevo."
+            )
+            return
+
         target = text[8:].strip()
         target_lower = target.lower()
         analizar_cartera_completa = target == "" or target_lower in ANALYZE_PORTFOLIO_TARGETS
