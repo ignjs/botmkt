@@ -6,7 +6,12 @@ import pandas as pd
 import yfinance as yf
 from scipy.optimize import minimize
 
+from services.risk_engine import ANNUAL_RISK_FREE_RATE, TRADING_DAYS_PER_YEAR
+
 logger = logging.getLogger(__name__)
+
+MAX_VOL_LOW_RISK: float = 0.15
+"""Maximum annualized portfolio volatility allowed for risk_tolerance < 4."""
 
 
 async def optimizar_cartera(
@@ -51,14 +56,14 @@ async def optimizar_cartera(
         df = close[valid_symbols].dropna()
         log_returns = np.log(df / df.shift(1)).dropna()
 
-        mu = log_returns.mean().values * 252  # annualized
-        cov = log_returns.cov().values * 252   # annualized covariance
+        mu = log_returns.mean().values * TRADING_DAYS_PER_YEAR  # annualized
+        cov = log_returns.cov().values * TRADING_DAYS_PER_YEAR   # annualized covariance
 
         n = len(valid_symbols)
         max_pos = float(perfil.get("max_position_pct", 25)) / 100
         risk_tolerance = int(perfil.get("risk_tolerance", 5))
 
-        rf = 0.05  # annual risk-free rate
+        rf = ANNUAL_RISK_FREE_RATE
 
         def neg_sharpe(w):
             port_ret = float(np.dot(w, mu))
@@ -76,7 +81,7 @@ async def optimizar_cartera(
         if risk_tolerance < 4:
             constraints.append({
                 "type": "ineq",
-                "fun": lambda w: 0.15 - portfolio_vol(w),
+                "fun": lambda w: MAX_VOL_LOW_RISK - portfolio_vol(w),
             })
 
         bounds = [(0.05, max_pos)] * n

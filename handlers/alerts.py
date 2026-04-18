@@ -10,7 +10,7 @@ from db import add_price_alert, delete_price_alert, get_user_alerts
 logger = logging.getLogger(__name__)
 
 ALERT_PATTERN = re.compile(
-    r'^/alerta\s+([A-Z0-9\.\-=^]+)\s+(above|below)\s+(\d+(?:\.\d+)?)$',
+    r'^/alerta\s+([A-Z0-9\.=^-]+)\s+(above|below)\s+(\d+(?:\.\d+)?)$',
     re.IGNORECASE,
 )
 

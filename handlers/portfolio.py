@@ -4,10 +4,12 @@ import re
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from db import add_position, get_investment_profile, remove_position
+from db import add_position, get_investment_profile, remove_position, save_risk_snapshot
+from services.optimizer import formatear_rebalanceo_para_telegram, optimizar_cartera
 from services.perplexity import analyze_portfolio, analyze_stock
 from services.planner import build_weekly_execution_plan
 from services.portfolio_service import build_portfolio_snapshot, build_stock_analysis_context
+from services.risk_engine import calcular_metricas_cartera, formatear_metricas_para_telegram
 from utils.rate_limiter import ai_limiter
 
 logger = logging.getLogger(__name__)
@@ -88,11 +90,9 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Add risk metrics section
         try:
-            from services.risk_engine import calcular_metricas_cartera, formatear_metricas_para_telegram
-            from db import save_risk_snapshot
             metricas = await calcular_metricas_cartera(snap["detalle"])
             texto += f"\n\n{formatear_metricas_para_telegram(metricas)}"
-            # Persist snapshot asynchronously (non-blocking on failure)
+            # Persist snapshot (non-blocking on failure)
             try:
                 await save_risk_snapshot(user_id, metricas)
             except Exception:
@@ -173,8 +173,6 @@ async def rebalancear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
 
     try:
-        from services.optimizer import formatear_rebalanceo_para_telegram, optimizar_cartera
-
         snap = await build_portfolio_snapshot(user_id)
         if not snap["detalle"] or len(snap["detalle"]) < 2:
             await msg.reply_text(

@@ -6,6 +6,12 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
+ANNUAL_RISK_FREE_RATE: float = 0.05
+"""Annual risk-free rate used in Sharpe ratio computation."""
+
+TRADING_DAYS_PER_YEAR: int = 252
+"""Number of trading days assumed per calendar year."""
+
 
 async def calcular_metricas_cartera(posiciones: list[dict], periodo: str = "1y") -> dict:
     """Compute risk metrics for a portfolio.
@@ -66,14 +72,14 @@ async def calcular_metricas_cartera(posiciones: list[dict], periodo: str = "1y")
         mu = port_returns.mean()
         sigma = port_returns.std()
 
-        rf_daily = 0.05 / 252
+        rf_daily = ANNUAL_RISK_FREE_RATE / TRADING_DAYS_PER_YEAR
 
         # VaR 95% parametric 1-day
         var_95_pct = -(mu - 1.645 * sigma) * 100
         var_95_usd = var_95_pct / 100 * total_valor
 
         # Sharpe annualized
-        sharpe = ((mu - rf_daily) / sigma * np.sqrt(252)) if sigma > 0 else 0.0
+        sharpe = ((mu - rf_daily) / sigma * np.sqrt(TRADING_DAYS_PER_YEAR)) if sigma > 0 else 0.0
 
         # Maximum Drawdown
         cum_returns = np.exp(np.cumsum(port_returns))
