@@ -1,13 +1,15 @@
 import logging
 import re
 
-from telegram.ext import Application, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from config import Config
 from db import ensure_schema, init_pool
+from handlers.alerts import alerta_handler, borrar_alerta_handler, mis_alertas_handler
 from handlers.investment_profile import investment_profile_handler
 from handlers.message import message_handler
 from handlers.portfolio import portfolio_handler
+from services.alert_checker import check_price_alerts
 
 logging.basicConfig(level=Config.LOG_LEVEL)
 
@@ -30,6 +32,20 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT, investment_profile_handler), group=0)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(portfolio_pattern), portfolio_handler), group=1)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler), group=1)
+
+    # Alert commands
+    app.add_handler(CommandHandler("alerta", alerta_handler))
+    app.add_handler(CommandHandler("mis_alertas", mis_alertas_handler))
+    app.add_handler(CommandHandler("borrar_alerta", borrar_alerta_handler))
+
+    # Register /rebalancear command
+    from handlers.portfolio import rebalancear_handler
+    app.add_handler(CommandHandler("rebalancear", rebalancear_handler))
+
+    # Schedule alert checker every 5 minutes
+    job_queue = app.job_queue
+    if job_queue:
+        job_queue.run_repeating(check_price_alerts, interval=300, first=60)
 
     print("🤖 Bot iniciado - Polling...")
     app.run_polling()

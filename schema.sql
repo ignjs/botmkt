@@ -29,7 +29,45 @@ CREATE TABLE IF NOT EXISTS investment_profiles (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS risk_snapshots (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    var_95_pct NUMERIC,
+    sharpe_ratio NUMERIC,
+    max_drawdown_pct NUMERIC,
+    hhi NUMERIC,
+    portfolio_value NUMERIC,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, snapshot_date)
+);
+
+CREATE TABLE IF NOT EXISTS price_alerts (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    condition TEXT NOT NULL CHECK (condition IN ('above', 'below')),
+    target_price NUMERIC NOT NULL,
+    triggered BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS weekly_plans (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    week_start DATE NOT NULL,
+    plan_text TEXT NOT NULL,
+    actions_json JSONB,
+    reviewed BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, week_start)
+);
+
 CREATE INDEX IF NOT EXISTS idx_positions_user_id ON positions(user_id);
 CREATE INDEX IF NOT EXISTS idx_investment_profiles_updated_at ON investment_profiles(updated_at);
+CREATE INDEX IF NOT EXISTS idx_risk_snapshots_user_id ON risk_snapshots(user_id);
+CREATE INDEX IF NOT EXISTS idx_price_alerts_user_id ON price_alerts(user_id);
+CREATE INDEX IF NOT EXISTS idx_price_alerts_triggered ON price_alerts(triggered);
+CREATE INDEX IF NOT EXISTS idx_weekly_plans_user_id ON weekly_plans(user_id);
 
 RESET ROLE;

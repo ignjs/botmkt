@@ -1,3 +1,4 @@
+import logging
 import re
 
 from telegram import Update
@@ -8,6 +9,8 @@ from services.perplexity import analyze_portfolio, analyze_stock
 from services.planner import build_weekly_execution_plan
 from services.portfolio_service import build_portfolio_snapshot, build_stock_analysis_context
 from utils.rate_limiter import ai_limiter
+
+logger = logging.getLogger(__name__)
 
 SYMBOL_PATTERN = re.compile(r'^(\^[A-Z0-9]{2,}|[A-Z0-9]+(?:\.[A-Z]{1,5})?|[A-Z0-9]+=[A-Z])$')
 PLAN_TRIGGERS = {
@@ -80,7 +83,24 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not snap["detalle"]:
             await msg.reply_text("No tienes posiciones en tu cartera todavía.")
             return
-        await msg.reply_text(f"📊 **Tu cartera** (Valor: ${snap['valor_total']:,.0f})\n{snap['tabla']}", parse_mode="Markdown")
+
+        texto = f"📊 **Tu cartera** (Valor: ${snap['valor_total']:,.0f})\n{snap['tabla']}"
+
+        # Add risk metrics section
+        try:
+            from services.risk_engine import calcular_metricas_cartera, formatear_metricas_para_telegram
+            from db import save_risk_snapshot
+            metricas = await calcular_metricas_cartera(snap["detalle"])
+            texto += f"\n\n{formatear_metricas_para_telegram(metricas)}"
+            # Persist snapshot asynchronously (non-blocking on failure)
+            try:
+                await save_risk_snapshot(user_id, metricas)
+            except Exception:
+                pass
+        except Exception:
+            pass  # Risk metrics failure should not block portfolio display
+
+        await msg.reply_text(texto, parse_mode="Markdown")
         return
 
     if _is_weekly_plan_request(text):
@@ -137,3 +157,43 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await msg.reply_text(DEFAULT_HELP_TEXT)
+
+
+async def rebalancear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /rebalancear command - show optimal portfolio weights.
+
+    Args:
+        update: Telegram Update object.
+        context: Telegram context.
+
+    Returns:
+        None
+    """
+    msg = update.message
+    user_id = update.effective_user.id
+
+    try:
+        from services.optimizer import formatear_rebalanceo_para_telegram, optimizar_cartera
+
+        snap = await build_portfolio_snapshot(user_id)
+        if not snap["detalle"] or len(snap["detalle"]) < 2:
+            await msg.reply_text(
+                "Necesitas al menos 2 posiciones en tu cartera para optimizar. "
+                "Agrega posiciones con `+SYM cantidad precio`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        profile = await get_investment_profile(user_id)
+        if not profile:
+            profile = {"risk_tolerance": 5, "max_position_pct": 25}
+
+        await msg.reply_text("⚙️ Calculando pesos óptimos de Markowitz...")
+
+        resultado = await optimizar_cartera(snap["detalle"], profile)
+        texto = formatear_rebalanceo_para_telegram(resultado)
+        await msg.reply_text(texto, parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en rebalancear_handler: %s", e)
+        await msg.reply_text(f"❌ No pude calcular el rebalanceo: {str(e)}")
+
