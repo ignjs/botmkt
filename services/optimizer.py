@@ -14,6 +14,75 @@ MAX_VOL_LOW_RISK: float = 0.15
 """Maximum annualized portfolio volatility allowed for risk_tolerance < 4."""
 
 
+def _build_feasible_uniform_bounds(n: int, max_pos_input: float) -> tuple[float, float]:
+    """Return feasible uniform lower/upper bounds for weights.
+
+    Keeps the original intent (min 5%, max profile cap) while guaranteeing
+    the feasible region can satisfy sum(weights)=1.
+    """
+    if n <= 0:
+        raise ValueError("n debe ser mayor a 0")
+
+    # Keep previous policy when possible.
+    min_pos = min(0.05, 1.0 / n)
+    max_pos = min(max(max_pos_input, 0.0), 1.0)
+
+    # Ensure feasibility with sum(weights)=1 for uniform bounds.
+    if min_pos * n > 1.0:
+        min_pos = 1.0 / n
+
+    if max_pos * n < 1.0:
+        adjusted = min(1.0, (1.0 / n) + 1e-6)
+        logger.warning(
+            "max_position_pct=%.2f%% es infactible para %s activos; ajustando cota superior a %.2f%%",
+            max_pos_input * 100,
+            n,
+            adjusted * 100,
+        )
+        max_pos = adjusted
+
+    if min_pos > max_pos:
+        mid = 1.0 / n
+        min_pos = max(0.0, min(mid, 1.0))
+        max_pos = min(1.0, max(mid, 0.0))
+
+    return float(min_pos), float(max_pos)
+
+
+def _feasible_start(n: int, lower: float, upper: float, seed: int = 7) -> np.ndarray:
+    """Build a feasible start point for bounded simplex constraints."""
+    w = np.full(n, 1.0 / n, dtype=float)
+    w = np.clip(w, lower, upper)
+
+    target = 1.0
+    for _ in range(50):
+        diff = target - float(w.sum())
+        if abs(diff) <= 1e-10:
+            break
+
+        if diff > 0:
+            room = upper - w
+            total_room = float(room.sum())
+            if total_room <= 0:
+                break
+            w += diff * (room / total_room)
+        else:
+            room = w - lower
+            total_room = float(room.sum())
+            if total_room <= 0:
+                break
+            w += diff * (room / total_room)
+
+        w = np.clip(w, lower, upper)
+
+    # Deterministic tiny jitter helps SLSQP when equal-weight start is flat.
+    rng = np.random.default_rng(seed)
+    jitter = rng.normal(0, 1e-4, size=n)
+    w = np.clip(w + jitter, lower, upper)
+    w = w / w.sum()
+    return w
+
+
 async def optimizar_cartera(
     posiciones: list[dict],
     perfil: dict,
@@ -60,7 +129,7 @@ async def optimizar_cartera(
         cov = log_returns.cov().values * TRADING_DAYS_PER_YEAR   # annualized covariance
 
         n = len(valid_symbols)
-        max_pos = float(perfil.get("max_position_pct", 25)) / 100
+        max_pos_input = float(perfil.get("max_position_pct", 25)) / 100
         risk_tolerance = int(perfil.get("risk_tolerance", 5))
 
         rf = ANNUAL_RISK_FREE_RATE
@@ -75,29 +144,54 @@ async def optimizar_cartera(
 
         objective_fn = neg_sharpe if objetivo == "sharpe" else portfolio_vol
 
-        constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+        lower, upper = _build_feasible_uniform_bounds(n, max_pos_input)
+        bounds = [(lower, upper)] * n
 
-        # Additional volatility constraint for low risk tolerance
+        base_constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+        vol_constraint = {
+            "type": "ineq",
+            "fun": lambda w: MAX_VOL_LOW_RISK - portfolio_vol(w),
+        }
+
+        attempts = []
+        constraints_with_risk = base_constraints + ([vol_constraint] if risk_tolerance < 4 else [])
+        attempts.append((objective_fn, constraints_with_risk, "objetivo principal"))
+
+        # Fallback 1: relax volatility constraint if low-risk constraint is too strict for data.
         if risk_tolerance < 4:
-            constraints.append({
-                "type": "ineq",
-                "fun": lambda w: MAX_VOL_LOW_RISK - portfolio_vol(w),
-            })
+            attempts.append((objective_fn, base_constraints, "sin restricción de volatilidad"))
 
-        bounds = [(0.05, max_pos)] * n
-        w0 = np.full(n, 1.0 / n)
+        # Fallback 2: minimize volatility as a robust secondary objective.
+        attempts.append((portfolio_vol, base_constraints, "objetivo min_vol"))
 
-        result = minimize(
-            objective_fn,
-            w0,
-            method="SLSQP",
-            bounds=bounds,
-            constraints=constraints,
-            options={"maxiter": 500, "ftol": 1e-9},
-        )
+        initial_points = [
+            _feasible_start(n, lower, upper, seed=7),
+            _feasible_start(n, lower, upper, seed=17),
+            np.full(n, 1.0 / n),
+        ]
 
-        if not result.success:
-            raise ValueError(f"Optimización no convergió: {result.message}")
+        result = None
+        for objective_try, constraints_try, label in attempts:
+            for w0 in initial_points:
+                candidate = minimize(
+                    objective_try,
+                    w0,
+                    method="SLSQP",
+                    bounds=bounds,
+                    constraints=constraints_try,
+                    options={"maxiter": 1000, "ftol": 1e-8},
+                )
+                if candidate.success:
+                    result = candidate
+                    break
+                result = candidate
+            if result is not None and result.success:
+                if label != "objetivo principal":
+                    logger.warning("Optimización convergió usando fallback: %s", label)
+                break
+
+        if result is None or not result.success:
+            raise ValueError(f"Optimización no convergió: {result.message if result else 'sin resultado'}")
 
         w_opt = result.x
         w_opt = np.clip(w_opt, 0, 1)

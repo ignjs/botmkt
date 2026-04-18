@@ -106,6 +106,26 @@ async def test_single_symbol_raises_error():
             await optimizar_cartera(posiciones, perfil)
 
 
+@pytest.mark.asyncio
+async def test_infeasible_max_position_pct_is_adjusted():
+    """If profile cap is infeasible (e.g. 25% with 2 assets), optimizer should still converge."""
+    from services.optimizer import optimizar_cartera
+
+    posiciones = [
+        {"symbol": "AAPL", "qty": 10, "precio": 150, "valor": 1500},
+        {"symbol": "MSFT", "qty": 5, "precio": 300, "valor": 1500},
+    ]
+    perfil = {"risk_tolerance": 5, "max_position_pct": 25}
+    raw = _make_multi_index_raw(["AAPL", "MSFT"])
+
+    with patch("yfinance.download", return_value=raw):
+        result = await optimizar_cartera(posiciones, perfil)
+
+    total = sum(result["optimal_weights"].values())
+    assert total == pytest.approx(1.0, abs=1e-4)
+    assert len(result["operations"]) == 2
+
+
 def test_formatear_rebalanceo_para_telegram_contains_disclaimer():
     """Formatted output should include disclaimer and key metrics."""
     from services.optimizer import formatear_rebalanceo_para_telegram
