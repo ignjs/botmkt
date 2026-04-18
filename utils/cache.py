@@ -20,8 +20,7 @@ class PriceCache:
             ttl_seconds: Seconds before a cache entry is considered expired.
         """
         self._ttl = ttl_seconds
-        self._store: dict[str, tuple[Any, float, bool]] = {}  # key -> (value, expires_at, stale)
-        self._logger = logging.getLogger(__name__)
+        self._store: dict[str, tuple[Any, float]] = {}  # key -> (value, expires_at)
 
     def get(self, key: str) -> Optional[tuple[Any, bool]]:
         """Retrieve a cached value by key.
@@ -38,11 +37,11 @@ class PriceCache:
         try:
             if key not in self._store:
                 return None
-            value, expires_at, _ = self._store[key]
+            value, expires_at = self._store[key]
             is_stale = time.monotonic() > expires_at
             return value, is_stale
         except Exception as e:
-            self._logger.exception("Error en cache.get(%s): %s", key, e)
+            logger.exception("Error en cache.get(%s): %s", key, e)
             return None
 
     def set(self, key: str, value: Any) -> None:
@@ -57,9 +56,9 @@ class PriceCache:
         """
         try:
             expires_at = time.monotonic() + self._ttl
-            self._store[key] = (value, expires_at, False)
+            self._store[key] = (value, expires_at)
         except Exception as e:
-            self._logger.exception("Error en cache.set(%s): %s", key, e)
+            logger.exception("Error en cache.set(%s): %s", key, e)
 
     def invalidate(self, key: str) -> None:
         """Remove a specific key from the cache.
@@ -73,7 +72,7 @@ class PriceCache:
         try:
             self._store.pop(key, None)
         except Exception as e:
-            self._logger.exception("Error en cache.invalidate(%s): %s", key, e)
+            logger.exception("Error en cache.invalidate(%s): %s", key, e)
 
     def clear_all(self) -> None:
         """Remove all entries from the cache.
@@ -84,7 +83,7 @@ class PriceCache:
         try:
             self._store.clear()
         except Exception as e:
-            self._logger.exception("Error en cache.clear_all: %s", e)
+            logger.exception("Error en cache.clear_all: %s", e)
 
 
 # Global instance

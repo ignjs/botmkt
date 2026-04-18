@@ -8,6 +8,8 @@ from openai import OpenAI
 from config import Config
 from utils.prompt_loader import load_prompt
 
+logger = logging.getLogger(__name__)
+
 client = OpenAI(
     api_key=Config.PERPLEXITY_API_KEY,
     base_url="https://api.perplexity.ai"
@@ -163,7 +165,6 @@ async def analyze_stock_with_sentiment(
     Raises:
         Exception: On API failure.
     """
-    logger_fn = logging.getLogger(__name__)
     try:
         prompt = build_stock_analysis_prompt(symbol, indicadores)
         sentiment_prompt = (
@@ -174,16 +175,14 @@ async def analyze_stock_with_sentiment(
         config = PROMPT_CONFIG["stock_analysis"]
         response = _chat(sentiment_prompt, **config)
 
-        # Parse sentiment score
+        # Parse sentiment score (matches 1-9 or 10)
         sentiment_score = None
-        match = re.search(r'SENTIMIENTO:\s*(\d{1,2})/10', response, re.IGNORECASE)
+        match = re.search(r'SENTIMIENTO:\s*(10|[1-9])/10', response, re.IGNORECASE)
         if match:
-            score = int(match.group(1))
-            if 1 <= score <= 10:
-                sentiment_score = score
+            sentiment_score = int(match.group(1))
 
         return response, sentiment_score
     except Exception as e:
-        logger_fn.exception("Error en analyze_stock_with_sentiment: %s", e)
+        logger.exception("Error en analyze_stock_with_sentiment: %s", e)
         raise
 

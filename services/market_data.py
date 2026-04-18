@@ -31,7 +31,6 @@ async def _fetch_yfinance(symbol: str) -> Optional[dict]:
     Raises:
         asyncio.TimeoutError: If yfinance takes longer than _YFINANCE_TIMEOUT seconds.
     """
-    logger_fn = logging.getLogger(__name__)
     try:
         loop = asyncio.get_event_loop()
 
@@ -49,10 +48,10 @@ async def _fetch_yfinance(symbol: str) -> Optional[dict]:
         )
         return data
     except asyncio.TimeoutError:
-        logger_fn.warning("yfinance timeout para %s", symbol)
+        logger.warning("yfinance timeout para %s", symbol)
         return None
     except Exception as e:
-        logger_fn.warning("yfinance error para %s: %s", symbol, e)
+        logger.warning("yfinance error para %s: %s", symbol, e)
         return None
 
 
@@ -68,7 +67,6 @@ async def _fetch_alpha_vantage(symbol: str) -> Optional[dict]:
     Raises:
         None
     """
-    logger_fn = logging.getLogger(__name__)
     if not ALPHA_VANTAGE_KEY:
         return None
     try:
@@ -87,7 +85,7 @@ async def _fetch_alpha_vantage(symbol: str) -> Optional[dict]:
             return None
         return {"precio_actual": precio, "symbol": symbol, "source": "alpha_vantage"}
     except Exception as e:
-        logger_fn.warning("Alpha Vantage error para %s: %s", symbol, e)
+        logger.warning("Alpha Vantage error para %s: %s", symbol, e)
         return None
 
 
@@ -108,7 +106,6 @@ async def get_price(symbol: str) -> dict:
     Raises:
         DataUnavailableError: If all sources fail and no cached data exists.
     """
-    logger_fn = logging.getLogger(__name__)
     try:
         # 1. Check fresh cache first
         cached = price_cache.get(symbol)
@@ -134,12 +131,12 @@ async def get_price(symbol: str) -> dict:
             value, _ = cached
             stale_data = dict(value)
             stale_data["stale"] = True
-            logger_fn.warning("Retornando datos obsoletos del caché para %s", symbol)
+            logger.warning("Retornando datos obsoletos del caché para %s", symbol)
             return stale_data
 
         raise DataUnavailableError(f"No hay datos disponibles para {symbol}")
     except DataUnavailableError:
         raise
     except Exception as e:
-        logger_fn.exception("Error en get_price(%s): %s", symbol, e)
+        logger.exception("Error en get_price(%s): %s", symbol, e)
         raise
