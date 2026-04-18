@@ -1,8 +1,11 @@
-import os
-import asyncpg
+import json
 import logging
+import os
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Dict, List, Optional
 from urllib.parse import urlparse
-from typing import Dict, List, Optional
+
+import asyncpg
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,6 +13,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 logger = logging.getLogger(__name__)
 _SCHEMA_READY = False
+_pool: Optional[asyncpg.Pool] = None
 
 ALLOWED_HORIZONS = {"corto", "mediano", "largo"}
 ALLOWED_STRATEGIES = {"growth", "dividendos", "valor", "mixta"}
@@ -61,6 +65,47 @@ SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_positions_user_id ON positions(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_investment_profiles_updated_at ON investment_profiles(updated_at)",
+    """
+    CREATE TABLE IF NOT EXISTS risk_snapshots (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        var_95_pct NUMERIC,
+        sharpe_ratio NUMERIC,
+        max_drawdown_pct NUMERIC,
+        hhi NUMERIC,
+        portfolio_value NUMERIC,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, snapshot_date)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_risk_snapshots_user_id ON risk_snapshots(user_id)",
+    """
+    CREATE TABLE IF NOT EXISTS price_alerts (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        symbol TEXT NOT NULL,
+        condition TEXT NOT NULL CHECK (condition IN ('above', 'below')),
+        target_price NUMERIC NOT NULL,
+        triggered BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_price_alerts_user_id ON price_alerts(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_price_alerts_triggered ON price_alerts(triggered)",
+    """
+    CREATE TABLE IF NOT EXISTS weekly_plans (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        week_start DATE NOT NULL,
+        plan_text TEXT NOT NULL,
+        actions_json JSONB,
+        reviewed BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, week_start)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_weekly_plans_user_id ON weekly_plans(user_id)",
 ]
 
 
@@ -110,37 +155,92 @@ def normalize_investment_profile(profile_data: Dict) -> Dict:
     return data
 
 
-async def _ensure_schema_on_connection(conn):
+async def init_pool() -> None:
+    """Initialise the global asyncpg connection pool.
+
+    Args:
+        None
+
+    Returns:
+        None — sets the module-level ``_pool`` variable.
+
+    Raises:
+        ValueError: If DATABASE_URL is invalid.
+        asyncpg.PostgresError: On connection failure.
+    """
+    global _pool, _SCHEMA_READY
+    logger = logging.getLogger(__name__)
+    try:
+        db_url = _get_valid_database_url()
+        _pool = await asyncpg.create_pool(
+            db_url,
+            min_size=2,
+            max_size=10,
+            command_timeout=30,
+        )
+        async with _pool.acquire() as conn:
+            await _ensure_schema_on_connection(conn)
+        _SCHEMA_READY = True
+        logger.info("Connection pool initialised (min=2, max=10)")
+    except Exception as e:
+        logger.exception("Error initialising connection pool: %s", e)
+        raise
+
+
+@asynccontextmanager
+async def get_conn() -> AsyncIterator[asyncpg.Connection]:
+    """Async context manager that yields a connection from the pool.
+
+    Initialises the pool lazily if it has not been created yet.
+
+    Args:
+        None
+
+    Returns:
+        asyncpg.Connection: A pooled database connection.
+
+    Raises:
+        asyncpg.PostgresError: On connection failure.
+    """
+    global _pool
+    logger = logging.getLogger(__name__)
+    if _pool is None:
+        await init_pool()
+    try:
+        async with _pool.acquire() as conn:
+            yield conn
+    except Exception as e:
+        logger.exception("Error acquiring connection from pool: %s", e)
+        raise
+
+
+async def _ensure_schema_on_connection(conn) -> None:
     for statement in SCHEMA_STATEMENTS:
         await conn.execute(statement)
 
 
-async def ensure_schema():
-    global _SCHEMA_READY
-    conn = None
-    try:
-        conn = await asyncpg.connect(_get_valid_database_url())
-        await _ensure_schema_on_connection(conn)
-        _SCHEMA_READY = True
-    finally:
-        if conn:
-            await conn.close()
+async def ensure_schema() -> None:
+    """Ensure all required DB tables exist.
 
+    Creates the pool (if needed) and runs all schema statements.
 
-async def connect_db():
+    Args:
+        None
+
+    Returns:
+        None
+
+    Raises:
+        asyncpg.PostgresError: On schema creation failure.
+    """
     global _SCHEMA_READY
-    conn = None
+    logger = logging.getLogger(__name__)
     try:
-        db_url = _get_valid_database_url()
-        conn = await asyncpg.connect(db_url)
-        if not _SCHEMA_READY:
+        async with get_conn() as conn:
             await _ensure_schema_on_connection(conn)
-            _SCHEMA_READY = True
-        return conn
+        _SCHEMA_READY = True
     except Exception as e:
-        logger.exception("Error conectando a la base de datos: %s", e)
-        if conn:
-            await conn.close()
+        logger.exception("Error ensuring schema: %s", e)
         raise
 
 
@@ -153,145 +253,511 @@ async def get_user_id(conn, telegram_user_id: int) -> int:
 
 
 async def add_position(telegram_user_id: int, symbol: str, quantity: float, avg_buy_price: Optional[float] = None):
+    """Add or update a portfolio position for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        symbol: Ticker symbol (e.g. AAPL).
+        quantity: Number of shares/units (must be > 0).
+        avg_buy_price: Average purchase price per unit (must be > 0).
+
+    Returns:
+        str: Confirmation message with updated position details.
+
+    Raises:
+        ValueError: If quantity or avg_buy_price are invalid.
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
     if quantity <= 0:
         raise ValueError("quantity debe ser mayor a 0")
     if avg_buy_price is None or avg_buy_price <= 0:
         raise ValueError("avg_buy_price debe ser mayor a 0")
 
-    conn = await connect_db()
     try:
-        user_id = await get_user_id(conn, telegram_user_id)
-        existing = await conn.fetchrow(
-            """
-            SELECT quantity, avg_buy_price FROM positions
-            WHERE user_id = $1 AND symbol = $2
-            """,
-            user_id,
-            symbol,
-        )
-
-        if existing:
-            old_qty = float(existing["quantity"])
-            old_avg = float(existing["avg_buy_price"] or 0)
-            new_total_qty = old_qty + quantity
-            new_avg_price = (old_avg * old_qty + avg_buy_price * quantity) / new_total_qty
-
-            await conn.execute(
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            existing = await conn.fetchrow(
                 """
-                UPDATE positions SET
-                    quantity = $1,
-                    avg_buy_price = $2,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = $3 AND symbol = $4
+                SELECT quantity, avg_buy_price FROM positions
+                WHERE user_id = $1 AND symbol = $2
                 """,
-                new_total_qty,
-                new_avg_price,
                 user_id,
                 symbol,
             )
-            return f"{symbol} actualizado: {new_total_qty:.0f} @ {new_avg_price:.2f}"
 
-        await conn.execute(
-            """
-            INSERT INTO positions (user_id, symbol, quantity, avg_buy_price, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """,
-            user_id,
-            symbol,
-            quantity,
-            avg_buy_price,
-        )
-        return f"{symbol} agregado: {quantity:.0f} @ {avg_buy_price:.2f}"
-    finally:
-        await conn.close()
+            if existing:
+                old_qty = float(existing["quantity"])
+                old_avg = float(existing["avg_buy_price"] or 0)
+                new_total_qty = old_qty + quantity
+                new_avg_price = (old_avg * old_qty + avg_buy_price * quantity) / new_total_qty
+
+                await conn.execute(
+                    """
+                    UPDATE positions SET
+                        quantity = $1,
+                        avg_buy_price = $2,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = $3 AND symbol = $4
+                    """,
+                    new_total_qty,
+                    new_avg_price,
+                    user_id,
+                    symbol,
+                )
+                return f"{symbol} actualizado: {new_total_qty:.0f} @ {new_avg_price:.2f}"
+
+            await conn.execute(
+                """
+                INSERT INTO positions (user_id, symbol, quantity, avg_buy_price, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                user_id,
+                symbol,
+                quantity,
+                avg_buy_price,
+            )
+            return f"{symbol} agregado: {quantity:.0f} @ {avg_buy_price:.2f}"
+    except Exception as e:
+        logger.exception("Error en add_position: %s", e)
+        raise
 
 
-async def remove_position(telegram_user_id: int, symbol: str):
-    conn = await connect_db()
+async def remove_position(telegram_user_id: int, symbol: str) -> None:
+    """Remove a portfolio position for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        symbol: Ticker symbol to remove.
+
+    Returns:
+        None
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
     try:
-        user_id = await get_user_id(conn, telegram_user_id)
-        await conn.execute("DELETE FROM positions WHERE user_id=$1 AND symbol=$2", user_id, symbol)
-    finally:
-        await conn.close()
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            await conn.execute("DELETE FROM positions WHERE user_id=$1 AND symbol=$2", user_id, symbol)
+    except Exception as e:
+        logger.exception("Error en remove_position: %s", e)
+        raise
 
 
 async def get_positions(telegram_user_id: int) -> List[Dict]:
-    conn = await connect_db()
+    """Retrieve all portfolio positions for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+
+    Returns:
+        List[Dict]: List of position records with symbol, quantity, avg_buy_price.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
     try:
-        user_id = await get_user_id(conn, telegram_user_id)
-        rows = await conn.fetch(
-            "SELECT symbol, quantity, avg_buy_price FROM positions WHERE user_id=$1 ORDER BY symbol",
-            user_id,
-        )
-        return [dict(row) for row in rows]
-    finally:
-        await conn.close()
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            rows = await conn.fetch(
+                "SELECT symbol, quantity, avg_buy_price FROM positions WHERE user_id=$1 ORDER BY symbol",
+                user_id,
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_positions: %s", e)
+        raise
 
 
 async def save_investment_profile(telegram_user_id: int, profile_data: Dict) -> Dict:
+    """Persist an investment profile for a user (upsert).
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        profile_data: Raw profile dict; unknown keys are ignored and defaults applied.
+
+    Returns:
+        Dict: The saved profile record as returned by the database.
+
+    Raises:
+        ValueError: If profile_data contains invalid values.
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
     normalized = normalize_investment_profile(profile_data)
-    conn = await connect_db()
     try:
-        user_id = await get_user_id(conn, telegram_user_id)
-        row = await conn.fetchrow(
-            """
-            INSERT INTO investment_profiles (
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO investment_profiles (
+                    user_id,
+                    risk_tolerance,
+                    investment_horizon,
+                    max_position_pct,
+                    max_country_pct,
+                    max_sector_pct,
+                    max_drawdown_pct,
+                    preferred_strategy,
+                    cash_buffer_pct,
+                    created_at,
+                    updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    risk_tolerance = EXCLUDED.risk_tolerance,
+                    investment_horizon = EXCLUDED.investment_horizon,
+                    max_position_pct = EXCLUDED.max_position_pct,
+                    max_country_pct = EXCLUDED.max_country_pct,
+                    max_sector_pct = EXCLUDED.max_sector_pct,
+                    max_drawdown_pct = EXCLUDED.max_drawdown_pct,
+                    preferred_strategy = EXCLUDED.preferred_strategy,
+                    cash_buffer_pct = EXCLUDED.cash_buffer_pct,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING risk_tolerance, investment_horizon, max_position_pct, max_country_pct,
+                          max_sector_pct, max_drawdown_pct, preferred_strategy, cash_buffer_pct,
+                          created_at, updated_at
+                """,
                 user_id,
-                risk_tolerance,
-                investment_horizon,
-                max_position_pct,
-                max_country_pct,
-                max_sector_pct,
-                max_drawdown_pct,
-                preferred_strategy,
-                cash_buffer_pct,
-                created_at,
-                updated_at
+                normalized["risk_tolerance"],
+                normalized["investment_horizon"],
+                normalized["max_position_pct"],
+                normalized["max_country_pct"],
+                normalized["max_sector_pct"],
+                normalized["max_drawdown_pct"],
+                normalized["preferred_strategy"],
+                normalized["cash_buffer_pct"],
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT (user_id) DO UPDATE SET
-                risk_tolerance = EXCLUDED.risk_tolerance,
-                investment_horizon = EXCLUDED.investment_horizon,
-                max_position_pct = EXCLUDED.max_position_pct,
-                max_country_pct = EXCLUDED.max_country_pct,
-                max_sector_pct = EXCLUDED.max_sector_pct,
-                max_drawdown_pct = EXCLUDED.max_drawdown_pct,
-                preferred_strategy = EXCLUDED.preferred_strategy,
-                cash_buffer_pct = EXCLUDED.cash_buffer_pct,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING risk_tolerance, investment_horizon, max_position_pct, max_country_pct,
-                      max_sector_pct, max_drawdown_pct, preferred_strategy, cash_buffer_pct,
-                      created_at, updated_at
-            """,
-            user_id,
-            normalized["risk_tolerance"],
-            normalized["investment_horizon"],
-            normalized["max_position_pct"],
-            normalized["max_country_pct"],
-            normalized["max_sector_pct"],
-            normalized["max_drawdown_pct"],
-            normalized["preferred_strategy"],
-            normalized["cash_buffer_pct"],
-        )
-        return dict(row)
-    finally:
-        await conn.close()
+            return dict(row)
+    except Exception as e:
+        logger.exception("Error en save_investment_profile: %s", e)
+        raise
 
 
 async def get_investment_profile(telegram_user_id: int) -> Optional[Dict]:
-    conn = await connect_db()
+    """Retrieve an investment profile for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+
+    Returns:
+        Optional[Dict]: Profile record, or None if not set.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
     try:
-        user_id = await get_user_id(conn, telegram_user_id)
-        row = await conn.fetchrow(
-            """
-            SELECT risk_tolerance, investment_horizon, max_position_pct, max_country_pct,
-                   max_sector_pct, max_drawdown_pct, preferred_strategy, cash_buffer_pct,
-                   created_at, updated_at
-            FROM investment_profiles
-            WHERE user_id = $1
-            """,
-            user_id,
-        )
-        return dict(row) if row else None
-    finally:
-        await conn.close()
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            row = await conn.fetchrow(
+                """
+                SELECT risk_tolerance, investment_horizon, max_position_pct, max_country_pct,
+                       max_sector_pct, max_drawdown_pct, preferred_strategy, cash_buffer_pct,
+                       created_at, updated_at
+                FROM investment_profiles
+                WHERE user_id = $1
+                """,
+                user_id,
+            )
+            return dict(row) if row else None
+    except Exception as e:
+        logger.exception("Error en get_investment_profile: %s", e)
+        raise
+
+
+async def save_risk_snapshot(telegram_user_id: int, metricas: dict) -> None:
+    """Persist a daily risk snapshot for a user (upsert by date).
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        metricas: Dict with var_95_pct, sharpe, max_drawdown_pct, hhi, portfolio_value.
+
+    Returns:
+        None
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            await conn.execute(
+                """
+                INSERT INTO risk_snapshots (user_id, snapshot_date, var_95_pct, sharpe_ratio,
+                    max_drawdown_pct, hhi, portfolio_value)
+                VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6)
+                ON CONFLICT (user_id, snapshot_date) DO UPDATE SET
+                    var_95_pct = EXCLUDED.var_95_pct,
+                    sharpe_ratio = EXCLUDED.sharpe_ratio,
+                    max_drawdown_pct = EXCLUDED.max_drawdown_pct,
+                    hhi = EXCLUDED.hhi,
+                    portfolio_value = EXCLUDED.portfolio_value,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                user_id,
+                metricas.get("var_95_pct"),
+                metricas.get("sharpe"),
+                metricas.get("max_drawdown_pct"),
+                metricas.get("hhi"),
+                metricas.get("portfolio_value"),
+            )
+    except Exception as e:
+        logger.exception("Error en save_risk_snapshot: %s", e)
+        raise
+
+
+async def get_risk_history(telegram_user_id: int, days: int = 30) -> List[Dict]:
+    """Retrieve the last N days of risk snapshots for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        days: Number of calendar days to look back (default 30).
+
+    Returns:
+        List[Dict]: Rows ordered by snapshot_date descending.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            rows = await conn.fetch(
+                """
+                SELECT snapshot_date, var_95_pct, sharpe_ratio, max_drawdown_pct, hhi, portfolio_value
+                FROM risk_snapshots
+                WHERE user_id = $1 AND snapshot_date >= CURRENT_DATE - $2::INTEGER
+                ORDER BY snapshot_date DESC
+                """,
+                user_id,
+                days,
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_risk_history: %s", e)
+        raise
+
+
+async def add_price_alert(
+    telegram_user_id: int, symbol: str, condition: str, target_price: float
+) -> int:
+    """Create a new price alert for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        symbol: Ticker symbol.
+        condition: 'above' or 'below'.
+        target_price: Target price threshold.
+
+    Returns:
+        int: ID of the newly created alert.
+
+    Raises:
+        ValueError: If condition is not 'above' or 'below'.
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    if condition not in ("above", "below"):
+        raise ValueError("condition debe ser 'above' o 'below'")
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO price_alerts (user_id, symbol, condition, target_price)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+                """,
+                user_id, symbol, condition, target_price,
+            )
+            return row["id"]
+    except Exception as e:
+        logger.exception("Error en add_price_alert: %s", e)
+        raise
+
+
+async def get_user_alerts(telegram_user_id: int) -> List[Dict]:
+    """Get all active (non-triggered) alerts for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+
+    Returns:
+        List[Dict]: Alert records ordered by creation date.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            rows = await conn.fetch(
+                """
+                SELECT id, symbol, condition, target_price, triggered, created_at
+                FROM price_alerts
+                WHERE user_id = $1 AND triggered = FALSE
+                ORDER BY created_at DESC
+                """,
+                user_id,
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_user_alerts: %s", e)
+        raise
+
+
+async def delete_price_alert(telegram_user_id: int, alert_id: int) -> bool:
+    """Delete a price alert by ID for a given user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        alert_id: Alert ID to delete.
+
+    Returns:
+        bool: True if the alert was found and deleted, False otherwise.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            result = await conn.execute(
+                "DELETE FROM price_alerts WHERE id = $1 AND user_id = $2",
+                alert_id, user_id,
+            )
+            return result == "DELETE 1"
+    except Exception as e:
+        logger.exception("Error en delete_price_alert: %s", e)
+        raise
+
+
+async def get_all_active_alerts() -> List[Dict]:
+    """Get all non-triggered alerts across all users.
+
+    Returns:
+        List[Dict]: All active alert records with telegram_user_id included.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT pa.id, u.telegram_user_id, pa.symbol, pa.condition, pa.target_price
+                FROM price_alerts pa
+                JOIN users u ON pa.user_id = u.id
+                WHERE pa.triggered = FALSE
+                ORDER BY pa.symbol
+                """
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_all_active_alerts: %s", e)
+        raise
+
+
+async def mark_alert_triggered(alert_id: int) -> None:
+    """Mark a price alert as triggered.
+
+    Args:
+        alert_id: Alert ID to mark as triggered.
+
+    Returns:
+        None
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            await conn.execute(
+                "UPDATE price_alerts SET triggered = TRUE WHERE id = $1",
+                alert_id,
+            )
+    except Exception as e:
+        logger.exception("Error en mark_alert_triggered: %s", e)
+        raise
+
+
+async def save_weekly_plan(
+    telegram_user_id: int, plan_text: str, actions: Optional[List] = None
+) -> None:
+    """Persist the weekly plan for a user (upsert by week_start = current Monday).
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        plan_text: Full plan text in Markdown.
+        actions: Optional list of action dicts.
+
+    Returns:
+        None
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        actions_json = json.dumps(actions or [], ensure_ascii=False)
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            await conn.execute(
+                """
+                INSERT INTO weekly_plans (user_id, week_start, plan_text, actions_json)
+                VALUES ($1, DATE_TRUNC('week', CURRENT_DATE), $2, $3)
+                ON CONFLICT (user_id, week_start) DO UPDATE SET
+                    plan_text = EXCLUDED.plan_text,
+                    actions_json = EXCLUDED.actions_json,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                user_id,
+                plan_text,
+                actions_json,
+            )
+    except Exception as e:
+        logger.exception("Error en save_weekly_plan: %s", e)
+        raise
+
+
+async def get_last_weekly_plan(telegram_user_id: int) -> Optional[Dict]:
+    """Retrieve the most recent weekly plan for a user (excluding the current week).
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+
+    Returns:
+        Optional[Dict]: The previous week's plan record, or None if not found.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            row = await conn.fetchrow(
+                """
+                SELECT week_start, plan_text, actions_json, reviewed
+                FROM weekly_plans
+                WHERE user_id = $1 AND week_start < DATE_TRUNC('week', CURRENT_DATE)
+                ORDER BY week_start DESC
+                LIMIT 1
+                """,
+                user_id,
+            )
+            return dict(row) if row else None
+    except Exception as e:
+        logger.exception("Error en get_last_weekly_plan: %s", e)
+        raise
+

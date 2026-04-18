@@ -1,10 +1,14 @@
 import json
-from typing import Dict
+import logging
+import re
+from typing import Dict, Optional
 
 from openai import OpenAI
 
 from config import Config
 from utils.prompt_loader import load_prompt
+
+logger = logging.getLogger(__name__)
 
 client = OpenAI(
     api_key=Config.PERPLEXITY_API_KEY,
@@ -77,11 +81,22 @@ def build_portfolio_rules_prompt(profile: dict, diagnosis: dict) -> str:
     )
 
 
-def build_weekly_plan_prompt(profile: dict, diagnosis: dict) -> str:
+def build_weekly_plan_prompt(profile: dict, diagnosis: dict, previous_plan: str = "") -> str:
+    """Build the weekly execution plan prompt.
+
+    Args:
+        profile: Investment profile dict.
+        diagnosis: Portfolio diagnosis dict.
+        previous_plan: Previous week's plan text for memory context.
+
+    Returns:
+        str: Rendered prompt string.
+    """
     return load_prompt(
         "weekly_execution_plan",
         profile_json=_render_json(profile),
         diagnosis_json=_render_json(diagnosis),
+        previous_plan=previous_plan or "Sin plan registrado la semana anterior.",
     )
 
 
@@ -111,8 +126,20 @@ async def analyze_portfolio_against_rules(profile: dict, diagnosis: dict) -> str
     return _chat(prompt, **config)
 
 
-async def generate_weekly_plan_text(profile: dict, diagnosis: dict) -> str:
-    prompt = build_weekly_plan_prompt(profile, diagnosis)
+async def generate_weekly_plan_text(
+    profile: dict, diagnosis: dict, previous_plan: str = ""
+) -> str:
+    """Generate the weekly execution plan text via AI.
+
+    Args:
+        profile: Investment profile dict.
+        diagnosis: Portfolio diagnosis dict.
+        previous_plan: Previous week's plan text for memory context.
+
+    Returns:
+        str: AI-generated plan text.
+    """
+    prompt = build_weekly_plan_prompt(profile, diagnosis, previous_plan)
     config = PROMPT_CONFIG["weekly_execution_plan"]
     return _chat(prompt, **config)
 
@@ -121,3 +148,41 @@ async def generate_telegram_plan_summary(plan_text: str, diagnosis: dict) -> str
     prompt = build_telegram_brief_prompt(plan_text, diagnosis)
     config = PROMPT_CONFIG["telegram_brief"]
     return _chat(prompt, **config)
+
+
+async def analyze_stock_with_sentiment(
+    symbol: str, indicadores: dict
+) -> tuple[str, Optional[int]]:
+    """Analyze a stock and extract a sentiment score 1-10.
+
+    Args:
+        symbol: Ticker symbol.
+        indicadores: Market data dict.
+
+    Returns:
+        tuple[str, Optional[int]]: (analysis_text, sentiment_score or None).
+
+    Raises:
+        Exception: On API failure.
+    """
+    try:
+        prompt = build_stock_analysis_prompt(symbol, indicadores)
+        sentiment_prompt = (
+            prompt + "\n\nAl final de tu respuesta, en una línea separada, escribe exactamente: "
+            "SENTIMIENTO: X/10 donde X es un número del 1 al 10 que refleje el sentimiento "
+            "del mercado (1=muy negativo, 10=muy positivo), basado en 3 titulares recientes o indicadores técnicos."
+        )
+        config = PROMPT_CONFIG["stock_analysis"]
+        response = _chat(sentiment_prompt, **config)
+
+        # Parse sentiment score (matches 1-9 or 10)
+        sentiment_score = None
+        match = re.search(r'SENTIMIENTO:\s*(10|[1-9])/10', response, re.IGNORECASE)
+        if match:
+            sentiment_score = int(match.group(1))
+
+        return response, sentiment_score
+    except Exception as e:
+        logger.exception("Error en analyze_stock_with_sentiment: %s", e)
+        raise
+
