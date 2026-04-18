@@ -1,9 +1,11 @@
-import os
-import asyncpg
+import json
 import logging
+import os
 from contextlib import asynccontextmanager
-from urllib.parse import urlparse
 from typing import AsyncIterator, Dict, List, Optional
+from urllib.parse import urlparse
+
+import asyncpg
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -63,6 +65,47 @@ SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_positions_user_id ON positions(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_investment_profiles_updated_at ON investment_profiles(updated_at)",
+    """
+    CREATE TABLE IF NOT EXISTS risk_snapshots (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        var_95_pct NUMERIC,
+        sharpe_ratio NUMERIC,
+        max_drawdown_pct NUMERIC,
+        hhi NUMERIC,
+        portfolio_value NUMERIC,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, snapshot_date)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_risk_snapshots_user_id ON risk_snapshots(user_id)",
+    """
+    CREATE TABLE IF NOT EXISTS price_alerts (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        symbol TEXT NOT NULL,
+        condition TEXT NOT NULL CHECK (condition IN ('above', 'below')),
+        target_price NUMERIC NOT NULL,
+        triggered BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_price_alerts_user_id ON price_alerts(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_price_alerts_triggered ON price_alerts(triggered)",
+    """
+    CREATE TABLE IF NOT EXISTS weekly_plans (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        week_start DATE NOT NULL,
+        plan_text TEXT NOT NULL,
+        actions_json JSONB,
+        reviewed BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, week_start)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_weekly_plans_user_id ON weekly_plans(user_id)",
 ]
 
 
@@ -424,3 +467,297 @@ async def get_investment_profile(telegram_user_id: int) -> Optional[Dict]:
     except Exception as e:
         logger.exception("Error en get_investment_profile: %s", e)
         raise
+
+
+async def save_risk_snapshot(telegram_user_id: int, metricas: dict) -> None:
+    """Persist a daily risk snapshot for a user (upsert by date).
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        metricas: Dict with var_95_pct, sharpe, max_drawdown_pct, hhi, portfolio_value.
+
+    Returns:
+        None
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            await conn.execute(
+                """
+                INSERT INTO risk_snapshots (user_id, snapshot_date, var_95_pct, sharpe_ratio,
+                    max_drawdown_pct, hhi, portfolio_value)
+                VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6)
+                ON CONFLICT (user_id, snapshot_date) DO UPDATE SET
+                    var_95_pct = EXCLUDED.var_95_pct,
+                    sharpe_ratio = EXCLUDED.sharpe_ratio,
+                    max_drawdown_pct = EXCLUDED.max_drawdown_pct,
+                    hhi = EXCLUDED.hhi,
+                    portfolio_value = EXCLUDED.portfolio_value,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                user_id,
+                metricas.get("var_95_pct"),
+                metricas.get("sharpe"),
+                metricas.get("max_drawdown_pct"),
+                metricas.get("hhi"),
+                metricas.get("portfolio_value"),
+            )
+    except Exception as e:
+        logger.exception("Error en save_risk_snapshot: %s", e)
+        raise
+
+
+async def get_risk_history(telegram_user_id: int, days: int = 30) -> List[Dict]:
+    """Retrieve the last N days of risk snapshots for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        days: Number of calendar days to look back (default 30).
+
+    Returns:
+        List[Dict]: Rows ordered by snapshot_date descending.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            rows = await conn.fetch(
+                """
+                SELECT snapshot_date, var_95_pct, sharpe_ratio, max_drawdown_pct, hhi, portfolio_value
+                FROM risk_snapshots
+                WHERE user_id = $1 AND snapshot_date >= CURRENT_DATE - $2::INTEGER
+                ORDER BY snapshot_date DESC
+                """,
+                user_id,
+                days,
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_risk_history: %s", e)
+        raise
+
+
+async def add_price_alert(
+    telegram_user_id: int, symbol: str, condition: str, target_price: float
+) -> int:
+    """Create a new price alert for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        symbol: Ticker symbol.
+        condition: 'above' or 'below'.
+        target_price: Target price threshold.
+
+    Returns:
+        int: ID of the newly created alert.
+
+    Raises:
+        ValueError: If condition is not 'above' or 'below'.
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    if condition not in ("above", "below"):
+        raise ValueError("condition debe ser 'above' o 'below'")
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO price_alerts (user_id, symbol, condition, target_price)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+                """,
+                user_id, symbol, condition, target_price,
+            )
+            return row["id"]
+    except Exception as e:
+        logger.exception("Error en add_price_alert: %s", e)
+        raise
+
+
+async def get_user_alerts(telegram_user_id: int) -> List[Dict]:
+    """Get all active (non-triggered) alerts for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+
+    Returns:
+        List[Dict]: Alert records ordered by creation date.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            rows = await conn.fetch(
+                """
+                SELECT id, symbol, condition, target_price, triggered, created_at
+                FROM price_alerts
+                WHERE user_id = $1 AND triggered = FALSE
+                ORDER BY created_at DESC
+                """,
+                user_id,
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_user_alerts: %s", e)
+        raise
+
+
+async def delete_price_alert(telegram_user_id: int, alert_id: int) -> bool:
+    """Delete a price alert by ID for a given user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        alert_id: Alert ID to delete.
+
+    Returns:
+        bool: True if the alert was found and deleted, False otherwise.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            result = await conn.execute(
+                "DELETE FROM price_alerts WHERE id = $1 AND user_id = $2",
+                alert_id, user_id,
+            )
+            return result == "DELETE 1"
+    except Exception as e:
+        logger.exception("Error en delete_price_alert: %s", e)
+        raise
+
+
+async def get_all_active_alerts() -> List[Dict]:
+    """Get all non-triggered alerts across all users.
+
+    Returns:
+        List[Dict]: All active alert records with telegram_user_id included.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT pa.id, u.telegram_user_id, pa.symbol, pa.condition, pa.target_price
+                FROM price_alerts pa
+                JOIN users u ON pa.user_id = u.id
+                WHERE pa.triggered = FALSE
+                ORDER BY pa.symbol
+                """
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_all_active_alerts: %s", e)
+        raise
+
+
+async def mark_alert_triggered(alert_id: int) -> None:
+    """Mark a price alert as triggered.
+
+    Args:
+        alert_id: Alert ID to mark as triggered.
+
+    Returns:
+        None
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            await conn.execute(
+                "UPDATE price_alerts SET triggered = TRUE WHERE id = $1",
+                alert_id,
+            )
+    except Exception as e:
+        logger.exception("Error en mark_alert_triggered: %s", e)
+        raise
+
+
+async def save_weekly_plan(
+    telegram_user_id: int, plan_text: str, actions: Optional[List] = None
+) -> None:
+    """Persist the weekly plan for a user (upsert by week_start = current Monday).
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        plan_text: Full plan text in Markdown.
+        actions: Optional list of action dicts.
+
+    Returns:
+        None
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        actions_json = json.dumps(actions or [], ensure_ascii=False)
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            await conn.execute(
+                """
+                INSERT INTO weekly_plans (user_id, week_start, plan_text, actions_json)
+                VALUES ($1, DATE_TRUNC('week', CURRENT_DATE), $2, $3)
+                ON CONFLICT (user_id, week_start) DO UPDATE SET
+                    plan_text = EXCLUDED.plan_text,
+                    actions_json = EXCLUDED.actions_json,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                user_id,
+                plan_text,
+                actions_json,
+            )
+    except Exception as e:
+        logger.exception("Error en save_weekly_plan: %s", e)
+        raise
+
+
+async def get_last_weekly_plan(telegram_user_id: int) -> Optional[Dict]:
+    """Retrieve the most recent weekly plan for a user (excluding the current week).
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+
+    Returns:
+        Optional[Dict]: The previous week's plan record, or None if not found.
+
+    Raises:
+        asyncpg.PostgresError: On database failure.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            row = await conn.fetchrow(
+                """
+                SELECT week_start, plan_text, actions_json, reviewed
+                FROM weekly_plans
+                WHERE user_id = $1 AND week_start < DATE_TRUNC('week', CURRENT_DATE)
+                ORDER BY week_start DESC
+                LIMIT 1
+                """,
+                user_id,
+            )
+            return dict(row) if row else None
+    except Exception as e:
+        logger.exception("Error en get_last_weekly_plan: %s", e)
+        raise
+

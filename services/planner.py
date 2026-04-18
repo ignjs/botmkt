@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from db import get_investment_profile
+from db import get_investment_profile, get_last_weekly_plan, save_weekly_plan
 from services.perplexity import generate_telegram_plan_summary, generate_weekly_plan_text
+from services.portfolio_service import build_portfolio_snapshot
+from services.risk_engine import calcular_metricas_cartera, formatear_metricas_para_telegram
 from services.rules_engine import analyze_portfolio_rules
 
 URGENCY_ORDER = {"high": "Alta", "medium": "Media", "low": "Baja"}
@@ -81,13 +83,42 @@ async def build_weekly_execution_plan(telegram_user_id: int) -> Dict:
     fallback_plan = build_rules_based_plan(profile, diagnosis)
     final_plan = fallback_plan
 
+    # Compute risk metrics and attach to diagnosis for AI prompt
+    risk_metrics_text = ""
     try:
-        ai_plan = await generate_weekly_plan_text(profile, diagnosis)
+        snap = await build_portfolio_snapshot(telegram_user_id)
+        if snap["detalle"]:
+            metricas = await calcular_metricas_cartera(snap["detalle"])
+            diagnosis["risk_metrics"] = metricas
+            risk_metrics_text = formatear_metricas_para_telegram(metricas)
+    except Exception:
+        pass
+
+    # Fetch previous week's plan for memory context
+    previous_plan_text = ""
+    try:
+        prev = await get_last_weekly_plan(telegram_user_id)
+        if prev:
+            previous_plan_text = prev.get("plan_text", "")
+    except Exception:
+        pass
+
+    try:
+        ai_plan = await generate_weekly_plan_text(profile, diagnosis, previous_plan=previous_plan_text)
         if ai_plan:
             short_plan = await generate_telegram_plan_summary(ai_plan, diagnosis)
             final_plan = short_plan or ai_plan
     except Exception:
         final_plan = fallback_plan
+
+    if risk_metrics_text:
+        final_plan = f"{final_plan}\n\n{risk_metrics_text}"
+
+    # Persist the plan for next week's memory
+    try:
+        await save_weekly_plan(telegram_user_id, final_plan)
+    except Exception:
+        pass
 
     return {
         "status": "ok",

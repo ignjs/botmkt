@@ -5,7 +5,7 @@ import yfinance as yf
 from telegram import Message, Update
 from telegram.ext import ContextTypes
 
-from services.perplexity import analyze_stock
+from services.perplexity import analyze_stock, analyze_stock_with_sentiment
 from services.portfolio_service import get_market_data_with_source
 from utils.rate_limiter import ai_limiter
 
@@ -88,7 +88,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        ia = await analyze_stock(symbol, data)
-        await msg.reply_text(f"{tabla}\n**IA:** {ia}", parse_mode="Markdown")
+        ia, sentiment_score = await analyze_stock_with_sentiment(symbol, data)
+        sentiment_line = ""
+        if sentiment_score is not None:
+            if sentiment_score >= 7:
+                s_emoji = "🟢"
+            elif sentiment_score >= 4:
+                s_emoji = "🟡"
+            else:
+                s_emoji = "🔴"
+            sentiment_line = f"\n*Sentimiento:* {sentiment_score}/10 {s_emoji}"
+        await msg.reply_text(f"{tabla}\n**IA:** {ia}{sentiment_line}", parse_mode="Markdown")
     except Exception as e:
         await msg.reply_text(f"❌ Error: {str(e) if str(e) else 'No cotizando'}")

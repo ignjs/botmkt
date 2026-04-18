@@ -18,12 +18,17 @@ BotMKT es una solución que combina un bot de Telegram y una API REST para anál
 ## Comandos principales
 - `+AAPL 10 170` → agrega o actualiza una posición.
 - `-AAPL` → elimina una posición de la cartera.
-- `/cartera` → muestra el snapshot actual de la cartera.
+- `/cartera` → muestra el snapshot actual de la cartera con métricas de riesgo (VaR, Sharpe, Max Drawdown, HHI).
 - `/analiza` → genera un análisis IA del portafolio o de un símbolo.
 - `/perfil` → si ya existe perfil, lo muestra y ofrece actualizarlo; si no existe, inicia el cuestionario.
 - `/editar_perfil` → inicia directamente la actualización guiada del perfil.
 - `/mi_perfil` → muestra el perfil guardado.
-- `/plan_semana` → genera el plan semanal de ejecución.
+- `/plan_semana` → genera el plan semanal de ejecución (incluye métricas de riesgo y memoria del plan anterior).
+- `/rebalancear` → calcula la distribución óptima de Markowitz para la cartera actual.
+- `/alerta AAPL above 200` → crea una alerta de precio (dispara cuando AAPL sube de $200).
+- `/alerta AAPL below 150` → crea una alerta de precio (dispara cuando AAPL baja de $150).
+- `/mis_alertas` → lista todas tus alertas de precio activas.
+- `/borrar_alerta 3` → elimina la alerta con ID 3.
 - `plan semanal` / `que deberia hacer esta semana` → activan el plan en lenguaje natural.
 
 ## Ejemplo de uso
