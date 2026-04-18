@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 
 from services.perplexity import analyze_stock
 from services.portfolio_service import get_market_data_with_source
+from utils.rate_limiter import ai_limiter
 
 KEYWORD_SYMBOLS = {
     "IAM": "IAM.SN",
@@ -78,6 +79,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 | RSI | MACD |
 | {rsi} | {macd} |
 """
+        user_id = update.effective_user.id
+        allowed, retry_after = ai_limiter.is_allowed(user_id)
+        if not allowed:
+            await msg.reply_text(
+                f"{tabla}\n⏳ Análisis IA no disponible ahora mismo. Espera {retry_after}s.",
+                parse_mode="Markdown",
+            )
+            return
+
         ia = await analyze_stock(symbol, data)
         await msg.reply_text(f"{tabla}\n**IA:** {ia}", parse_mode="Markdown")
     except Exception as e:
