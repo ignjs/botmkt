@@ -61,6 +61,8 @@ async def build_portfolio_snapshot(telegram_user_id: int) -> Dict:
         symbol = pos["symbol"]
         qty = float(pos["quantity"])
         avg_buy = float(pos["avg_buy_price"])
+        stop_loss = float(pos["stop_loss"]) if pos.get("stop_loss") is not None else None
+        atr = float(pos["atr"]) if pos.get("atr") is not None else None
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1d")
         precio = float(hist["Close"].iloc[-1]) if not hist.empty else avg_buy
@@ -74,15 +76,21 @@ async def build_portfolio_snapshot(telegram_user_id: int) -> Dict:
                 "precio": precio,
                 "valor": valor,
                 "pl": pl,
+                "stop_loss": stop_loss,
+                "atr": atr,
             }
         )
 
-    tabla = "| Símbolo | Cant | Precio | Valor | P/L |\n"
-    tabla += "|---|---|---|---|---|\n"
+    tabla = "| Símbolo | Cant | Precio | Valor | P/L | Stop |\n"
+    tabla += "|---|---|---|---|---|---|\n"
     for item in detalle:
+        stop_str = "—"
+        if item["stop_loss"] is not None:
+            stop_pct = ((item["stop_loss"] - item["precio"]) / item["precio"]) * 100
+            stop_str = f"${item['stop_loss']:,.2f} ({stop_pct:+.1f}%)"
         tabla += (
             f"| {item['symbol']} | {int(item['qty'])} | {item['precio']:.2f} | "
-            f"{item['valor']:.0f} | {item['pl']:+.1f}% |\n"
+            f"{item['valor']:.0f} | {item['pl']:+.1f}% | {stop_str} |\n"
         )
 
     return {"tabla": tabla, "valor_total": valor_total, "detalle": detalle}

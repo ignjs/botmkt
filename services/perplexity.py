@@ -23,6 +23,15 @@ PROMPT_CONFIG = {
     "telegram_brief": {"temperature": 0.1, "max_tokens": 300},
 }
 
+_REC_PATTERN = re.compile(
+    r'\b(comprar|vender|mantener|aumentar|reducir)\b',
+    re.IGNORECASE,
+)
+_CONFIDENCE_PATTERN = re.compile(
+    r'riesgo[:\s]+(\d{1,2})/10',
+    re.IGNORECASE,
+)
+
 
 def _chat(prompt: str, temperature: float = 0.2, max_tokens: int = 500) -> str:
     if not Config.PERPLEXITY_API_KEY:
@@ -39,6 +48,28 @@ def _chat(prompt: str, temperature: float = 0.2, max_tokens: int = 500) -> str:
 
 def _render_json(payload: Dict) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def _extract_recommendation(text: str) -> Optional[str]:
+    """Parse the first recognized recommendation keyword from an AI response."""
+    match = _REC_PATTERN.search(text)
+    if not match:
+        return None
+    word = match.group(1).lower()
+    # Normalize synonyms
+    if word in ("aumentar",):
+        return "comprar"
+    if word in ("reducir",):
+        return "vender"
+    return word
+
+
+def _extract_confidence(text: str) -> Optional[int]:
+    """Parse the risk/confidence score (1-10) from an AI response."""
+    match = _CONFIDENCE_PATTERN.search(text)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def build_stock_analysis_prompt(symbol: str, indicadores: dict) -> str:
@@ -66,6 +97,17 @@ def build_stock_analysis_prompt(symbol: str, indicadores: dict) -> str:
         symbol=symbol,
         stock_table=stock_table,
         position_context=position_context,
+    )
+
+
+def build_stock_analysis_prompt_with_backtest(
+    symbol: str, indicadores: dict, backtest_summary: str
+) -> str:
+    """Build stock analysis prompt with backtest context included."""
+    base_prompt = build_stock_analysis_prompt(symbol, indicadores)
+    return (
+        base_prompt
+        + f"\n\nContexto adicional — Backtest histórico RSI+MACD en {symbol}:\n{backtest_summary}"
     )
 
 
@@ -185,4 +227,49 @@ async def analyze_stock_with_sentiment(
     except Exception as e:
         logger.exception("Error en analyze_stock_with_sentiment: %s", e)
         raise
+
+
+async def analyze_stock_and_record(
+    telegram_user_id: int,
+    symbol: str,
+    indicadores: dict,
+    backtest_summary: Optional[str] = None,
+) -> str:
+    """Analyze a stock, record the AI recommendation to DB, and return the analysis text.
+
+    Args:
+        telegram_user_id: Telegram user ID used to save the recommendation.
+        symbol: Ticker symbol.
+        indicadores: Market data dict.
+        backtest_summary: Optional backtest context string to include in the prompt.
+
+    Returns:
+        str: AI analysis text.
+    """
+    if backtest_summary:
+        prompt = build_stock_analysis_prompt_with_backtest(symbol, indicadores, backtest_summary)
+    else:
+        prompt = build_stock_analysis_prompt(symbol, indicadores)
+
+    config = PROMPT_CONFIG["stock_analysis"]
+    response = _chat(prompt, **config)
+
+    # Save recommendation to DB (non-blocking on failure)
+    try:
+        recommendation = _extract_recommendation(response)
+        confidence = _extract_confidence(response)
+        price = float(indicadores.get("precio_actual", 0))
+        if recommendation and price > 0:
+            from db import save_ai_recommendation
+            await save_ai_recommendation(
+                telegram_user_id=telegram_user_id,
+                symbol=symbol,
+                recommendation=recommendation,
+                confidence=confidence,
+                price_at_recommendation=price,
+            )
+    except Exception as exc:
+        logger.warning("No se pudo guardar recomendación IA para %s: %s", symbol, exc)
+
+    return response
 

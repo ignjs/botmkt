@@ -10,10 +10,16 @@ CREATE TABLE IF NOT EXISTS positions (
     symbol TEXT NOT NULL,
     quantity NUMERIC NOT NULL,
     avg_buy_price NUMERIC NOT NULL,
+    stop_loss NUMERIC,
+    atr NUMERIC,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, symbol)
 );
+
+-- Idempotent migrations for existing deployments
+ALTER TABLE IF EXISTS positions ADD COLUMN IF NOT EXISTS stop_loss NUMERIC;
+ALTER TABLE IF EXISTS positions ADD COLUMN IF NOT EXISTS atr NUMERIC;
 
 CREATE TABLE IF NOT EXISTS investment_profiles (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -69,5 +75,36 @@ CREATE INDEX IF NOT EXISTS idx_risk_snapshots_user_id ON risk_snapshots(user_id)
 CREATE INDEX IF NOT EXISTS idx_price_alerts_user_id ON price_alerts(user_id);
 CREATE INDEX IF NOT EXISTS idx_price_alerts_triggered ON price_alerts(triggered);
 CREATE INDEX IF NOT EXISTS idx_weekly_plans_user_id ON weekly_plans(user_id);
+
+CREATE TABLE IF NOT EXISTS alerts_sent (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    alert_type TEXT NOT NULL,
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_sent_user_id ON alerts_sent(user_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_sent_sent_at ON alerts_sent(sent_at);
+
+CREATE TABLE IF NOT EXISTS ai_recommendations (
+    id SERIAL PRIMARY KEY,
+    telegram_user_id BIGINT,
+    symbol VARCHAR(20),
+    recommendation VARCHAR(50),
+    confidence INT,
+    price_at_recommendation NUMERIC,
+    recommended_at TIMESTAMP DEFAULT NOW(),
+    price_5d NUMERIC,
+    price_10d NUMERIC,
+    price_20d NUMERIC,
+    result_5d VARCHAR(10),
+    result_10d VARCHAR(10),
+    result_20d VARCHAR(10)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_recommendations_user_id ON ai_recommendations(telegram_user_id);
+CREATE INDEX IF NOT EXISTS idx_ai_recommendations_symbol ON ai_recommendations(symbol);
+CREATE INDEX IF NOT EXISTS idx_ai_recommendations_recommended_at ON ai_recommendations(recommended_at);
 
 RESET ROLE;

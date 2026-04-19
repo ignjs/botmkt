@@ -1,11 +1,11 @@
-"""Handlers for price alert commands: /alerta, /mis_alertas, /borrar_alerta."""
+"""Handlers for price alert commands: /alerta, /mis_alertas, /borrar_alerta, /alertas."""
 import logging
 import re
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from db import add_price_alert, delete_price_alert, get_user_alerts
+from db import add_price_alert, delete_price_alert, get_alerts_sent_last_24h, get_user_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -119,3 +119,40 @@ async def borrar_alerta_handler(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.exception("Error en borrar_alerta_handler: %s", e)
         await msg.reply_text("❌ No pude eliminar la alerta. Intenta nuevamente.")
+
+
+async def alertas_enviadas_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /alertas command — show alerts sent in the last 24 hours.
+
+    Args:
+        update: Telegram Update object.
+        context: Telegram context.
+
+    Returns:
+        None
+    """
+    msg = update.message
+    user_id = update.effective_user.id
+
+    try:
+        records = await get_alerts_sent_last_24h(user_id)
+        if not records:
+            await msg.reply_text("No recibiste alertas automáticas en las últimas 24 horas. ✅")
+            return
+
+        lines = ["🔔 *Alertas enviadas (últimas 24h):*\n"]
+        _LABELS = {
+            "stop_loss": "🛑 Stop-Loss alcanzado",
+            "rsi_oversold": "📉 RSI Sobreventa (<30)",
+            "rsi_overbought": "📈 RSI Sobrecompra (>70)",
+            "volume_spike": "📊 Volumen Anormal",
+        }
+        for rec in records:
+            label = _LABELS.get(rec["alert_type"], rec["alert_type"])
+            ts = rec["sent_at"].strftime("%H:%M") if rec["sent_at"] else "—"
+            lines.append(f"• `{rec['symbol']}` — {label} ({ts})")
+
+        await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en alertas_enviadas_handler: %s", e)
+        await msg.reply_text("❌ No pude obtener el historial de alertas. Intenta nuevamente.")

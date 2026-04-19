@@ -47,6 +47,37 @@ async def analyze(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+@app.get("/metrics/{telegram_user_id}")
+async def get_portfolio_metrics(telegram_user_id: int):
+    """Return quantitative portfolio metrics for a Telegram user.
+
+    Args:
+        telegram_user_id: Telegram user ID.
+
+    Returns:
+        dict: Sharpe, Beta, Max Drawdown, HHI, and supporting data.
+
+    Raises:
+        HTTPException 404: If the user has no positions.
+        HTTPException 500: On computation failure.
+    """
+    try:
+        from services.portfolio_metrics import compute_portfolio_metrics
+        from services.portfolio_service import build_portfolio_snapshot
+
+        snap = await build_portfolio_snapshot(telegram_user_id)
+        if not snap["detalle"]:
+            raise HTTPException(status_code=404, detail="El usuario no tiene posiciones activas.")
+
+        metrics = await compute_portfolio_metrics(snap["detalle"])
+        return {"telegram_user_id": telegram_user_id, "metrics": metrics}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("endpoints:app", host="0.0.0.0", port=8000)

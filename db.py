@@ -43,11 +43,15 @@ SCHEMA_STATEMENTS = [
         symbol TEXT NOT NULL,
         quantity NUMERIC NOT NULL,
         avg_buy_price NUMERIC NOT NULL,
+        stop_loss NUMERIC,
+        atr NUMERIC,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(user_id, symbol)
     )
     """,
+    "ALTER TABLE positions ADD COLUMN IF NOT EXISTS stop_loss NUMERIC",
+    "ALTER TABLE positions ADD COLUMN IF NOT EXISTS atr NUMERIC",
     """
     CREATE TABLE IF NOT EXISTS investment_profiles (
         user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -106,6 +110,37 @@ SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_weekly_plans_user_id ON weekly_plans(user_id)",
+    """
+    CREATE TABLE IF NOT EXISTS alerts_sent (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        symbol TEXT NOT NULL,
+        alert_type TEXT NOT NULL,
+        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_alerts_sent_user_id ON alerts_sent(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_alerts_sent_sent_at ON alerts_sent(sent_at)",
+    """
+    CREATE TABLE IF NOT EXISTS ai_recommendations (
+        id SERIAL PRIMARY KEY,
+        telegram_user_id BIGINT,
+        symbol VARCHAR(20),
+        recommendation VARCHAR(50),
+        confidence INT,
+        price_at_recommendation NUMERIC,
+        recommended_at TIMESTAMP DEFAULT NOW(),
+        price_5d NUMERIC,
+        price_10d NUMERIC,
+        price_20d NUMERIC,
+        result_5d VARCHAR(10),
+        result_10d VARCHAR(10),
+        result_20d VARCHAR(10)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ai_recommendations_user_id ON ai_recommendations(telegram_user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_recommendations_symbol ON ai_recommendations(symbol)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_recommendations_recommended_at ON ai_recommendations(recommended_at)",
 ]
 
 
@@ -252,7 +287,14 @@ async def get_user_id(conn, telegram_user_id: int) -> int:
     return row["id"]
 
 
-async def add_position(telegram_user_id: int, symbol: str, quantity: float, avg_buy_price: Optional[float] = None):
+async def add_position(
+    telegram_user_id: int,
+    symbol: str,
+    quantity: float,
+    avg_buy_price: Optional[float] = None,
+    stop_loss: Optional[float] = None,
+    atr: Optional[float] = None,
+):
     """Add or update a portfolio position for a user.
 
     Args:
@@ -260,6 +302,8 @@ async def add_position(telegram_user_id: int, symbol: str, quantity: float, avg_
         symbol: Ticker symbol (e.g. AAPL).
         quantity: Number of shares/units (must be > 0).
         avg_buy_price: Average purchase price per unit (must be > 0).
+        stop_loss: Optional ATR-based stop-loss price.
+        atr: Optional ATR value used to compute stop_loss.
 
     Returns:
         str: Confirmation message with updated position details.
@@ -297,11 +341,15 @@ async def add_position(telegram_user_id: int, symbol: str, quantity: float, avg_
                     UPDATE positions SET
                         quantity = $1,
                         avg_buy_price = $2,
+                        stop_loss = COALESCE($3, stop_loss),
+                        atr = COALESCE($4, atr),
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE user_id = $3 AND symbol = $4
+                    WHERE user_id = $5 AND symbol = $6
                     """,
                     new_total_qty,
                     new_avg_price,
+                    stop_loss,
+                    atr,
                     user_id,
                     symbol,
                 )
@@ -309,13 +357,16 @@ async def add_position(telegram_user_id: int, symbol: str, quantity: float, avg_
 
             await conn.execute(
                 """
-                INSERT INTO positions (user_id, symbol, quantity, avg_buy_price, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO positions (user_id, symbol, quantity, avg_buy_price, stop_loss, atr,
+                                       created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 user_id,
                 symbol,
                 quantity,
                 avg_buy_price,
+                stop_loss,
+                atr,
             )
             return f"{symbol} agregado: {quantity:.0f} @ {avg_buy_price:.2f}"
     except Exception as e:
@@ -353,7 +404,7 @@ async def get_positions(telegram_user_id: int) -> List[Dict]:
         telegram_user_id: Telegram user identifier.
 
     Returns:
-        List[Dict]: List of position records with symbol, quantity, avg_buy_price.
+        List[Dict]: List of position records with symbol, quantity, avg_buy_price, stop_loss, atr.
 
     Raises:
         asyncpg.PostgresError: On database failure.
@@ -363,7 +414,10 @@ async def get_positions(telegram_user_id: int) -> List[Dict]:
         async with get_conn() as conn:
             user_id = await get_user_id(conn, telegram_user_id)
             rows = await conn.fetch(
-                "SELECT symbol, quantity, avg_buy_price FROM positions WHERE user_id=$1 ORDER BY symbol",
+                """
+                SELECT symbol, quantity, avg_buy_price, stop_loss, atr
+                FROM positions WHERE user_id=$1 ORDER BY symbol
+                """,
                 user_id,
             )
             return [dict(row) for row in rows]
@@ -760,4 +814,353 @@ async def get_last_weekly_plan(telegram_user_id: int) -> Optional[Dict]:
     except Exception as e:
         logger.exception("Error en get_last_weekly_plan: %s", e)
         raise
+
+
+# ---------------------------------------------------------------------------
+# alerts_sent (E2)
+# ---------------------------------------------------------------------------
+
+async def was_alert_sent_recently(
+    telegram_user_id: int, symbol: str, alert_type: str, cooldown_hours: int = 4
+) -> bool:
+    """Check whether an alert was already sent to this user within the cooldown window.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        symbol: Ticker symbol.
+        alert_type: Alert type string (e.g. 'stop_loss', 'rsi_oversold').
+        cooldown_hours: Hours to look back (default 4).
+
+    Returns:
+        bool: True if the same alert was sent within the cooldown window.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            row = await conn.fetchrow(
+                """
+                SELECT id FROM alerts_sent
+                WHERE user_id = $1 AND symbol = $2 AND alert_type = $3
+                  AND sent_at >= NOW() - ($4 * INTERVAL '1 hour')
+                LIMIT 1
+                """,
+                user_id,
+                symbol,
+                alert_type,
+                cooldown_hours,
+            )
+            return row is not None
+    except Exception as e:
+        logger.exception("Error en was_alert_sent_recently: %s", e)
+        return False
+
+
+async def record_alert_sent(telegram_user_id: int, symbol: str, alert_type: str) -> None:
+    """Record that an alert was sent to a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        symbol: Ticker symbol.
+        alert_type: Alert type string.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            await conn.execute(
+                "INSERT INTO alerts_sent (user_id, symbol, alert_type) VALUES ($1, $2, $3)",
+                user_id,
+                symbol,
+                alert_type,
+            )
+    except Exception as e:
+        logger.exception("Error en record_alert_sent: %s", e)
+        raise
+
+
+async def get_alerts_sent_last_24h(telegram_user_id: int) -> List[Dict]:
+    """Retrieve alerts sent to a user in the last 24 hours.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+
+    Returns:
+        List[Dict]: Alert records ordered by sent_at descending.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            user_id = await get_user_id(conn, telegram_user_id)
+            rows = await conn.fetch(
+                """
+                SELECT symbol, alert_type, sent_at
+                FROM alerts_sent
+                WHERE user_id = $1 AND sent_at >= NOW() - INTERVAL '24 hours'
+                ORDER BY sent_at DESC
+                """,
+                user_id,
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_alerts_sent_last_24h: %s", e)
+        raise
+
+
+async def get_all_users_with_positions() -> List[Dict]:
+    """Return all users that have at least one active position.
+
+    Returns:
+        List[Dict]: Records with 'telegram_user_id'.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT u.telegram_user_id
+                FROM users u
+                JOIN positions p ON p.user_id = u.id
+                """
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_all_users_with_positions: %s", e)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# ai_recommendations (E4)
+# ---------------------------------------------------------------------------
+
+async def save_ai_recommendation(
+    telegram_user_id: int,
+    symbol: str,
+    recommendation: str,
+    confidence: Optional[int],
+    price_at_recommendation: float,
+) -> int:
+    """Persist a new AI recommendation.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        symbol: Ticker symbol.
+        recommendation: 'comprar', 'vender', or 'mantener'.
+        confidence: Confidence score 1-10, or None.
+        price_at_recommendation: Current price at the time of recommendation.
+
+    Returns:
+        int: ID of the inserted record.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO ai_recommendations
+                    (telegram_user_id, symbol, recommendation, confidence,
+                     price_at_recommendation, result_5d, result_10d, result_20d)
+                VALUES ($1, $2, $3, $4, $5, 'pendiente', 'pendiente', 'pendiente')
+                RETURNING id
+                """,
+                telegram_user_id,
+                symbol,
+                recommendation,
+                confidence,
+                price_at_recommendation,
+            )
+            return row["id"]
+    except Exception as e:
+        logger.exception("Error en save_ai_recommendation: %s", e)
+        raise
+
+
+async def get_pending_ai_recommendations() -> List[Dict]:
+    """Return all AI recommendations that still have pending evaluations.
+
+    Returns:
+        List[Dict]: Recommendation records with pending result fields.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, telegram_user_id, symbol, recommendation, confidence,
+                       price_at_recommendation, recommended_at,
+                       price_5d, price_10d, price_20d,
+                       result_5d, result_10d, result_20d
+                FROM ai_recommendations
+                WHERE result_5d = 'pendiente' OR result_10d = 'pendiente' OR result_20d = 'pendiente'
+                ORDER BY recommended_at
+                """
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_pending_ai_recommendations: %s", e)
+        raise
+
+
+async def update_ai_recommendation_result(
+    rec_id: int,
+    price_5d: Optional[float] = None,
+    price_10d: Optional[float] = None,
+    price_20d: Optional[float] = None,
+    result_5d: Optional[str] = None,
+    result_10d: Optional[str] = None,
+    result_20d: Optional[str] = None,
+) -> None:
+    """Update price and result fields for an AI recommendation.
+
+    Args:
+        rec_id: Recommendation record ID.
+        price_5d: Price 5 business days after recommendation.
+        price_10d: Price 10 business days after recommendation.
+        price_20d: Price 20 business days after recommendation.
+        result_5d: 'acierto', 'error', or 'pendiente'.
+        result_10d: Same for 10 days.
+        result_20d: Same for 20 days.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            await conn.execute(
+                """
+                UPDATE ai_recommendations SET
+                    price_5d  = COALESCE($1, price_5d),
+                    price_10d = COALESCE($2, price_10d),
+                    price_20d = COALESCE($3, price_20d),
+                    result_5d  = COALESCE($4, result_5d),
+                    result_10d = COALESCE($5, result_10d),
+                    result_20d = COALESCE($6, result_20d)
+                WHERE id = $7
+                """,
+                price_5d, price_10d, price_20d,
+                result_5d, result_10d, result_20d,
+                rec_id,
+            )
+    except Exception as e:
+        logger.exception("Error en update_ai_recommendation_result: %s", e)
+        raise
+
+
+async def get_user_ai_recommendations(telegram_user_id: int, limit: int = 10) -> List[Dict]:
+    """Return the most recent AI recommendations for a user.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        limit: Maximum number of records to return (default 10).
+
+    Returns:
+        List[Dict]: Recommendation records ordered by recommended_at descending.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, symbol, recommendation, confidence, price_at_recommendation,
+                       recommended_at, price_5d, price_10d, price_20d,
+                       result_5d, result_10d, result_20d
+                FROM ai_recommendations
+                WHERE telegram_user_id = $1
+                ORDER BY recommended_at DESC
+                LIMIT $2
+                """,
+                telegram_user_id,
+                limit,
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.exception("Error en get_user_ai_recommendations: %s", e)
+        raise
+
+
+async def get_ai_hit_rate(telegram_user_id: int) -> Dict:
+    """Compute hit-rate statistics for a user's AI recommendations.
+
+    Excludes records still marked as 'pendiente'.
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+
+    Returns:
+        dict with keys 'total', 'correct', 'hit_rate_pct'.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with get_conn() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE result_5d != 'pendiente') AS evaluated,
+                    COUNT(*) FILTER (WHERE result_5d = 'acierto'
+                                      OR result_10d = 'acierto'
+                                      OR result_20d = 'acierto') AS correct
+                FROM ai_recommendations
+                WHERE telegram_user_id = $1
+                """,
+                telegram_user_id,
+            )
+            evaluated = int(row["evaluated"] or 0)
+            correct = int(row["correct"] or 0)
+            hit_rate = round((correct / evaluated) * 100, 1) if evaluated else 0.0
+            return {"total": evaluated, "correct": correct, "hit_rate_pct": hit_rate}
+    except Exception as e:
+        logger.exception("Error en get_ai_hit_rate: %s", e)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# broker order sync (E5)
+# ---------------------------------------------------------------------------
+
+async def sync_order_to_positions(
+    telegram_user_id: int,
+    symbol: str,
+    qty: float,
+    fill_price: float,
+    side: str,
+) -> None:
+    """Sync a broker order execution into the positions table.
+
+    For a 'buy' order the position is added/updated; for a 'sell' order the
+    quantity is reduced (and the position removed when it reaches zero).
+
+    Args:
+        telegram_user_id: Telegram user identifier.
+        symbol: Ticker symbol.
+        qty: Filled quantity (positive).
+        fill_price: Average fill price.
+        side: 'buy' or 'sell'.
+    """
+    logger = logging.getLogger(__name__)
+    if side == "buy":
+        await add_position(telegram_user_id, symbol, qty, fill_price)
+    elif side == "sell":
+        try:
+            async with get_conn() as conn:
+                user_id = await get_user_id(conn, telegram_user_id)
+                existing = await conn.fetchrow(
+                    "SELECT quantity FROM positions WHERE user_id=$1 AND symbol=$2",
+                    user_id, symbol,
+                )
+                if not existing:
+                    return
+                new_qty = float(existing["quantity"]) - qty
+                if new_qty <= 0:
+                    await conn.execute(
+                        "DELETE FROM positions WHERE user_id=$1 AND symbol=$2",
+                        user_id, symbol,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE positions SET quantity=$1, updated_at=CURRENT_TIMESTAMP WHERE user_id=$2 AND symbol=$3",
+                        new_qty, user_id, symbol,
+                    )
+        except Exception as e:
+            logger.exception("Error en sync_order_to_positions (sell): %s", e)
+            raise
+    else:
+        logger.warning("sync_order_to_positions: side desconocido '%s'", side)
 

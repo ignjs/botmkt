@@ -55,8 +55,25 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if qty_value <= 0 or price_value <= 0:
                 raise ValueError("Cantidad y precio deben ser mayores a 0")
 
-            await add_position(user_id, symbol, qty_value, price_value)
-            await msg.reply_text(f"✅ {symbol} agregado ({qty_value:,.2f} @ {price_value:,.2f})")
+            # Calculate ATR-based stop-loss (E1)
+            stop_loss = None
+            atr = None
+            try:
+                from config import Config
+                from services.risk_calculator import calculate_atr_stop
+                multiplier = float(getattr(Config, "ATR_MULTIPLIER", 2.0))
+                atr_result = await calculate_atr_stop(symbol, price_value, multiplier)
+                stop_loss = atr_result["stop_loss"]
+                atr = atr_result["atr"]
+            except Exception as atr_err:
+                logger.warning("No se pudo calcular ATR stop para %s: %s", symbol, atr_err)
+
+            await add_position(user_id, symbol, qty_value, price_value, stop_loss=stop_loss, atr=atr)
+
+            reply = f"✅ {symbol} agregado ({qty_value:,.2f} @ {price_value:,.2f})"
+            if stop_loss is not None:
+                reply += f"\n🛡 Stop-Loss ATR: ${stop_loss:,.2f}"
+            await msg.reply_text(reply)
         except ValueError:
             await msg.reply_text("Formato inválido. Usa: +AAPL 10 170")
         except Exception:
@@ -149,6 +166,15 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text(
                     f"ℹ️ No tienes {symbol} guardado en cartera. Haré análisis solo con datos de mercado."
                 )
+
+            # Show backtest summary before AI analysis (E6)
+            try:
+                from services.backtester import run_rsi_macd_backtest, format_backtest_summary
+                bt_result = await run_rsi_macd_backtest(symbol)
+                bt_text = format_backtest_summary(symbol, bt_result)
+                await msg.reply_text(bt_text, parse_mode="Markdown")
+            except Exception as bt_err:
+                logger.warning("No se pudo ejecutar backtest para %s: %s", symbol, bt_err)
 
             ia = await analyze_stock(symbol, data)
             await msg.reply_text(f"🎯 **Análisis IA {symbol}**:\n{ia}", parse_mode="Markdown")
