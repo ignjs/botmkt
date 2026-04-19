@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable, Dict, Optional, Tuple
 
 from telegram import Update
-from telegram.ext import ContextTypes
+from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from db import get_investment_profile, save_investment_profile
 
@@ -112,13 +112,13 @@ async def investment_profile_handler(update: Update, context: ContextTypes.DEFAU
         profile = await get_investment_profile(user_id)
         if not profile:
             await message.reply_text("Aún no tienes perfil guardado. Usa `/perfil` para configurarlo.", parse_mode="Markdown")
-            return
+            raise ApplicationHandlerStop
 
         await message.reply_text(
             f"{_format_profile(profile)}\n\nSi quieres actualizarlo, usa `/editar_perfil`.",
             parse_mode="Markdown",
         )
-        return
+        raise ApplicationHandlerStop
 
     if normalized in PROFILE_START_COMMANDS:
         existing = await get_investment_profile(user_id)
@@ -130,7 +130,7 @@ async def investment_profile_handler(update: Update, context: ContextTypes.DEFAU
                 f"{intro} Responde una pregunta a la vez o escribe `cancelar`.\n\n{_build_step_prompt(0, existing)}",
                 parse_mode="Markdown",
             )
-            return
+            raise ApplicationHandlerStop
 
         if existing:
             context.user_data[PROFILE_FLOW_KEY] = {
@@ -141,14 +141,14 @@ async def investment_profile_handler(update: Update, context: ContextTypes.DEFAU
                 f"{_format_profile(existing)}\n\nYa existe un perfil asociado a tu usuario. Responde `actualizar` para modificarlo o `cancelar` para dejarlo igual.",
                 parse_mode="Markdown",
             )
-            return
+            raise ApplicationHandlerStop
 
         _start_questionnaire(context)
         await message.reply_text(
             f"Vamos a crear tu perfil. Responde una pregunta a la vez o escribe `cancelar`.\n\n{_build_step_prompt(0)}",
             parse_mode="Markdown",
         )
-        return
+        raise ApplicationHandlerStop
 
     flow = context.user_data.get(PROFILE_FLOW_KEY)
     if not flow:
@@ -163,7 +163,7 @@ async def investment_profile_handler(update: Update, context: ContextTypes.DEFAU
                 f"Vamos a actualizar tu perfil actual. Responde una pregunta a la vez o escribe `cancelar`.\n\n{_build_step_prompt(0, existing)}",
                 parse_mode="Markdown",
             )
-            return
+            raise ApplicationHandlerStop
 
         if normalized in PROFILE_CANCEL_RESPONSES:
             context.user_data.pop(PROFILE_FLOW_KEY, None)
@@ -171,18 +171,18 @@ async def investment_profile_handler(update: Update, context: ContextTypes.DEFAU
                 "Perfecto, mantengo tu perfil actual. Usa `/plan_semana` cuando quieras tu plan accionable.",
                 parse_mode="Markdown",
             )
-            return
+            raise ApplicationHandlerStop
 
         await message.reply_text(
             "Ya encontré tu perfil actual. Responde `actualizar` para modificarlo o `cancelar` para salir.",
             parse_mode="Markdown",
         )
-        return
+        raise ApplicationHandlerStop
 
     if normalized in PROFILE_CANCEL_RESPONSES:
         context.user_data.pop(PROFILE_FLOW_KEY, None)
         await message.reply_text("Perfil cancelado. Cuando quieras retomarlo, usa `/perfil`.", parse_mode="Markdown")
-        return
+        raise ApplicationHandlerStop
 
     step_index = int(flow.get("step", 0))
     if step_index >= len(PROFILE_STEPS):
@@ -202,7 +202,7 @@ async def investment_profile_handler(update: Update, context: ContextTypes.DEFAU
             f"⚠️ {exc}\n\n{_build_step_prompt(step_index, existing_profile)}",
             parse_mode="Markdown",
         )
-        return
+        raise ApplicationHandlerStop
 
     flow["step"] = step_index + 1
     if flow["step"] >= len(PROFILE_STEPS):
@@ -213,6 +213,7 @@ async def investment_profile_handler(update: Update, context: ContextTypes.DEFAU
             f"✅ Perfil guardado correctamente.\n\n{_format_profile(profile)}\n\nUsa `/plan_semana` para recibir un plan accionable.",
             parse_mode="Markdown",
         )
-        return
+        raise ApplicationHandlerStop
 
     await message.reply_text(_build_step_prompt(flow["step"], existing_profile), parse_mode="Markdown")
+    raise ApplicationHandlerStop
