@@ -1079,7 +1079,9 @@ async def get_user_ai_recommendations(telegram_user_id: int, limit: int = 10) ->
 async def get_ai_hit_rate(telegram_user_id: int) -> Dict:
     """Compute hit-rate statistics for a user's AI recommendations.
 
-    Excludes records still marked as 'pendiente'.
+    Counts a recommendation as 'correct' if the 5-day result is 'acierto',
+    and as 'evaluated' if result_5d is not 'pendiente'. Using 5-day results
+    as the primary evaluation horizon ensures consistency.
 
     Args:
         telegram_user_id: Telegram user identifier.
@@ -1094,9 +1096,7 @@ async def get_ai_hit_rate(telegram_user_id: int) -> Dict:
                 """
                 SELECT
                     COUNT(*) FILTER (WHERE result_5d != 'pendiente') AS evaluated,
-                    COUNT(*) FILTER (WHERE result_5d = 'acierto'
-                                      OR result_10d = 'acierto'
-                                      OR result_20d = 'acierto') AS correct
+                    COUNT(*) FILTER (WHERE result_5d = 'acierto') AS correct
                 FROM ai_recommendations
                 WHERE telegram_user_id = $1
                 """,

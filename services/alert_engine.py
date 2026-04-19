@@ -31,7 +31,12 @@ def _compute_rsi(close_series) -> float:
 
 
 def _compute_volume_zscore(hist) -> float:
-    """Return how many sigmas the last volume deviates from the 20-day mean."""
+    """Return how many sigmas the last volume deviates from the 20-day mean.
+
+    The most recent bar's volume is excluded from the window used to compute
+    mean and std so that we compare the current bar against the prior window,
+    not against itself.
+    """
     volumes = hist["Volume"].dropna()
     if len(volumes) < _VOLUME_LOOKBACK + 1:
         return 0.0

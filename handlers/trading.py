@@ -11,6 +11,9 @@ from db import sync_order_to_positions
 logger = logging.getLogger(__name__)
 
 # Conversation state: pending_orders[user_id] = order_dict
+# NOTE: This in-memory dict is sufficient for a single-process bot deployment.
+# It is not shared across restarts or multiple workers. For production use,
+# replace with a persistent store (e.g. Redis or a DB table).
 _pending_orders: dict[int, dict] = {}
 _CONFIRM_TIMEOUT_SECONDS = 60
 
