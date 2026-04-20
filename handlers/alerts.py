@@ -44,6 +44,7 @@ async def alerta_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     target_price = float(match.group(3))
 
     try:
+        await msg.reply_text("⏳ Creando alerta de precio...")
         alert_id = await add_price_alert(user_id, symbol, condition, target_price)
         condition_es = "sube de" if condition == "above" else "baja de"
         await msg.reply_text(
@@ -68,6 +69,7 @@ async def mis_alertas_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
 
     try:
+        await msg.reply_text("⏳ Consultando tus alertas activas...")
         alerts = await get_user_alerts(user_id)
         if not alerts:
             await msg.reply_text(
@@ -111,6 +113,7 @@ async def borrar_alerta_handler(update: Update, context: ContextTypes.DEFAULT_TY
     alert_id = int(parts[1])
 
     try:
+        await msg.reply_text("⏳ Eliminando alerta...")
         deleted = await delete_price_alert(user_id, alert_id)
         if deleted:
             await msg.reply_text(f"✅ Alerta #{alert_id} eliminada.")
@@ -127,6 +130,7 @@ async def alertas_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
 
     try:
+        await msg.reply_text("⏳ Consultando alertas proactivas enviadas...")
         alerts = await get_recent_sent_alerts(user_id, hours=24)
         if not alerts:
             await msg.reply_text("No tienes alertas proactivas enviadas en las últimas 24h.")

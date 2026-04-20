@@ -97,6 +97,7 @@ async def confirm_order_handler(update: Update, context: ContextTypes.DEFAULT_TY
     side = pending["side"]
 
     try:
+        await msg.reply_text("⏳ Ejecutando orden en Alpaca...")
         result = await place_order(symbol=symbol, qty=qty, side=side, order_type="market")
         fill_price = float(result.get("filled_avg_price") or 0)
         if fill_price > 0:
@@ -131,6 +132,7 @@ async def cuenta_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     msg = update.message
 
     try:
+        await msg.reply_text("⏳ Consultando cuenta y posiciones en Alpaca...")
         account = await get_account_info()
         positions = await get_open_positions()
 

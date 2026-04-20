@@ -70,6 +70,7 @@ class PortfolioHandler:
             return
 
         if text == "/cartera":
+            await message.reply_text("⏳ Analizando tu cartera...")
             snap = await build_portfolio_snapshot(user_id)
             if not snap["detalle"]:
                 await message.reply_text("No tienes posiciones en tu cartera todavía.")
@@ -99,6 +100,7 @@ class PortfolioHandler:
                 )
                 return
 
+            await message.reply_text("⏳ Generando tu plan semanal...")
             result = await build_weekly_execution_plan(user_id)
             await message.reply_text(result["plan_markdown"], parse_mode="Markdown")
             return
@@ -116,6 +118,7 @@ class PortfolioHandler:
             analizar_cartera_completa = target_lower in ANALYZE_PORTFOLIO_TARGETS
 
             if analizar_cartera_completa:
+                await message.reply_text("⏳ Analizando tu cartera completa...")
                 snap = await build_portfolio_snapshot(user_id)
                 if not snap["detalle"]:
                     await message.reply_text("No tienes posiciones en tu cartera.")
@@ -131,6 +134,7 @@ class PortfolioHandler:
                 return
 
             try:
+                await message.reply_text("⏳ Analizando activo y contexto de mercado...")
                 data, _, position = await build_stock_analysis_context(user_id, symbol)
                 if not position:
                     await message.reply_text(

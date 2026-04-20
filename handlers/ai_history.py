@@ -21,6 +21,7 @@ async def historial_ia_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
 
     try:
+        await msg.reply_text("⏳ Consultando historial de recomendaciones IA...")
         rows = await get_recent_ai_recommendations(user_id, limit=10)
         summary = await get_ai_hit_rate_summary(user_id)
 

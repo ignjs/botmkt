@@ -13,6 +13,7 @@ async def metricas_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = update.effective_user.id
 
     try:
+        await msg.reply_text("⏳ Calculando métricas de portafolio...")
         metrics = await calculate_portfolio_metrics(user_id)
         await msg.reply_text(format_metrics_for_telegram(metrics), parse_mode="Markdown")
     except Exception as exc:
