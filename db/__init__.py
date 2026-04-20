@@ -53,6 +53,7 @@ SCHEMA_STATEMENTS = [
         UNIQUE(user_id, symbol)
     )
     """,
+    "ALTER TABLE positions ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE",
     "ALTER TABLE positions ADD COLUMN IF NOT EXISTS stop_loss NUMERIC",
     "ALTER TABLE positions ADD COLUMN IF NOT EXISTS atr NUMERIC",
     """
@@ -86,6 +87,7 @@ SCHEMA_STATEMENTS = [
         UNIQUE(user_id, snapshot_date)
     )
     """,
+    "ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE",
     "CREATE INDEX IF NOT EXISTS idx_risk_snapshots_user_id ON risk_snapshots(user_id)",
     """
     CREATE TABLE IF NOT EXISTS price_alerts (
@@ -98,6 +100,7 @@ SCHEMA_STATEMENTS = [
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    "ALTER TABLE price_alerts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE",
     "CREATE INDEX IF NOT EXISTS idx_price_alerts_user_id ON price_alerts(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_price_alerts_triggered ON price_alerts(triggered)",
     """
@@ -112,6 +115,7 @@ SCHEMA_STATEMENTS = [
         UNIQUE(user_id, week_start)
     )
     """,
+    "ALTER TABLE weekly_plans ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE",
     "CREATE INDEX IF NOT EXISTS idx_weekly_plans_user_id ON weekly_plans(user_id)",
     """
     CREATE TABLE IF NOT EXISTS alerts_sent (
@@ -122,6 +126,7 @@ SCHEMA_STATEMENTS = [
         sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    "ALTER TABLE alerts_sent ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE",
     """
     CREATE INDEX IF NOT EXISTS idx_alerts_sent_user_symbol_type_time
     ON alerts_sent(user_id, symbol, alert_type, sent_at DESC)
@@ -143,6 +148,7 @@ SCHEMA_STATEMENTS = [
         result_20d VARCHAR(10) DEFAULT 'pendiente'
     )
     """,
+    "ALTER TABLE ai_recommendations ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE",
     """
     CREATE INDEX IF NOT EXISTS idx_ai_recommendations_user_date
     ON ai_recommendations(user_id, recommended_at DESC)
