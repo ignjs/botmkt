@@ -56,6 +56,30 @@ async def calculate_portfolio_metrics(telegram_user_id: int, period: str = "90d"
 
     symbols = [p["symbol"] for p in positions]
 
+    def _as_close_series(raw: pd.DataFrame) -> pd.Series:
+        if raw is None or raw.empty:
+            return pd.Series(dtype=float)
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            if "Close" not in raw.columns.get_level_values(0):
+                return pd.Series(dtype=float)
+            close_part = raw["Close"]
+            if isinstance(close_part, pd.DataFrame):
+                if close_part.empty:
+                    return pd.Series(dtype=float)
+                return close_part.iloc[:, 0]
+            return close_part
+
+        if "Close" in raw.columns:
+            close_part = raw["Close"]
+            if isinstance(close_part, pd.DataFrame):
+                if close_part.empty:
+                    return pd.Series(dtype=float)
+                return close_part.iloc[:, 0]
+            return close_part
+
+        return pd.Series(dtype=float)
+
     def _download_data() -> tuple[pd.DataFrame, pd.Series]:
         symbols_raw = yf.download(symbols, period=period, auto_adjust=True, progress=False)
         bench_raw = yf.download(settings.benchmark_symbol, period=period, auto_adjust=True, progress=False)
@@ -65,7 +89,7 @@ async def calculate_portfolio_metrics(telegram_user_id: int, period: str = "90d"
         else:
             close = symbols_raw[["Close"]].rename(columns={"Close": symbols[0]})
 
-        bench_close = bench_raw["Close"] if "Close" in bench_raw.columns else pd.Series(dtype=float)
+        bench_close = _as_close_series(bench_raw)
         return close, bench_close
 
     loop = asyncio.get_event_loop()
