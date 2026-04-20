@@ -784,7 +784,7 @@ async def was_alert_sent_recently(
                 WHERE user_id = $1
                   AND symbol = $2
                   AND alert_type = $3
-                  AND sent_at >= NOW() - ($4::TEXT || ' hours')::INTERVAL
+                                    AND sent_at >= NOW() - ($4 * INTERVAL '1 hour')
                 LIMIT 1
                 """,
                 user_id,
@@ -828,7 +828,7 @@ async def get_recent_sent_alerts(telegram_user_id: int, hours: int = 24) -> List
                 SELECT symbol, alert_type, sent_at
                 FROM alerts_sent
                 WHERE user_id = $1
-                  AND sent_at >= NOW() - ($2::TEXT || ' hours')::INTERVAL
+                                    AND sent_at >= NOW() - ($2 * INTERVAL '1 hour')
                 ORDER BY sent_at DESC
                 """,
                 user_id,
