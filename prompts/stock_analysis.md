@@ -4,6 +4,8 @@ Analiza `{symbol}` usando los siguientes datos de mercado:
 
 {position_context}
 
+{backtest_context}
+
 Entrega la respuesta en español y en Markdown.
 Incluye:
 - Tendencia de corto y largo plazo.
