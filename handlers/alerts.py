@@ -5,7 +5,7 @@ import re
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from db import add_price_alert, delete_price_alert, get_user_alerts
+from db import add_price_alert, delete_price_alert, get_recent_sent_alerts, get_user_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -119,3 +119,32 @@ async def borrar_alerta_handler(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.exception("Error en borrar_alerta_handler: %s", e)
         await msg.reply_text("❌ No pude eliminar la alerta. Intenta nuevamente.")
+
+
+async def alertas_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show proactive alerts sent in last 24h to the current user."""
+    msg = update.message
+    user_id = update.effective_user.id
+
+    try:
+        alerts = await get_recent_sent_alerts(user_id, hours=24)
+        if not alerts:
+            await msg.reply_text("No tienes alertas proactivas enviadas en las últimas 24h.")
+            return
+
+        labels = {
+            "stop_loss": "Stop-Loss alcanzado",
+            "rsi_extremo": "RSI extremo",
+            "volumen_anormal": "Volumen anormal",
+        }
+
+        lines = ["🚨 *Alertas enviadas (últimas 24h)*"]
+        for alert in alerts:
+            label = labels.get(alert["alert_type"], alert["alert_type"])
+            lines.append(
+                f"- `{alert['symbol']}` · {label} · {alert['sent_at'].strftime('%Y-%m-%d %H:%M')}"
+            )
+        await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en alertas_handler: %s", e)
+        await msg.reply_text("❌ No pude obtener el historial de alertas. Intenta nuevamente.")
