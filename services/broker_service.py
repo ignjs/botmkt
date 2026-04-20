@@ -5,33 +5,35 @@ from config.settings import settings
 
 
 def _build_client():
-    from alpaca_trade_api import REST
+    from alpaca.trading.client import TradingClient
 
-    base_url = "https://paper-api.alpaca.markets" if settings.alpaca_mode.lower() == "paper" else "https://api.alpaca.markets"
-    return REST(
-        key_id=settings.alpaca_api_key,
+    paper = settings.alpaca_mode.lower() == "paper"
+    return TradingClient(
+        api_key=settings.alpaca_api_key,
         secret_key=settings.alpaca_secret_key,
-        base_url=base_url,
-        api_version="v2",
+        paper=paper,
     )
 
 
 async def place_order(symbol, qty, side, order_type="market") -> Dict:
     def _place():
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import MarketOrderRequest
+
         client = _build_client()
-        order = client.submit_order(
+        req = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
-            side=side,
-            type=order_type,
-            time_in_force="day",
+            side=OrderSide(side),
+            time_in_force=TimeInForce.DAY,
         )
+        order = client.submit_order(req)
         return {
-            "id": order.id,
+            "id": str(order.id),
             "symbol": order.symbol,
             "qty": float(order.qty),
-            "side": order.side,
-            "status": order.status,
+            "side": order.side.value,
+            "status": order.status.value,
             "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
         }
 
@@ -57,7 +59,7 @@ async def get_account_info() -> Dict:
 async def get_open_positions() -> List[Dict]:
     def _get():
         client = _build_client()
-        positions = client.list_positions()
+        positions = client.get_all_positions()
         return [
             {
                 "symbol": p.symbol,
