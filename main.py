@@ -10,6 +10,7 @@ async def main() -> None:
     setup_logging()
     container = await Container.build()
     bot = container.telegram_bot()
+    bot.enable_scheduler()
     try:
         await bot.run()
     finally:

@@ -10,10 +10,15 @@ CREATE TABLE IF NOT EXISTS positions (
     symbol TEXT NOT NULL,
     quantity NUMERIC NOT NULL,
     avg_buy_price NUMERIC NOT NULL,
+    stop_loss NUMERIC,
+    atr NUMERIC,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, symbol)
 );
+
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS stop_loss NUMERIC;
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS atr NUMERIC;
 
 CREATE TABLE IF NOT EXISTS investment_profiles (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -63,11 +68,39 @@ CREATE TABLE IF NOT EXISTS weekly_plans (
     UNIQUE(user_id, week_start)
 );
 
+CREATE TABLE IF NOT EXISTS alerts_sent (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    alert_type TEXT NOT NULL,
+    sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ai_recommendations (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    symbol VARCHAR(20) NOT NULL,
+    recommendation VARCHAR(50) NOT NULL,
+    confidence INT,
+    price_at_recommendation NUMERIC NOT NULL,
+    recommended_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    price_5d NUMERIC,
+    price_10d NUMERIC,
+    price_20d NUMERIC,
+    result_5d VARCHAR(10) DEFAULT 'pendiente',
+    result_10d VARCHAR(10) DEFAULT 'pendiente',
+    result_20d VARCHAR(10) DEFAULT 'pendiente'
+);
+
 CREATE INDEX IF NOT EXISTS idx_positions_user_id ON positions(user_id);
 CREATE INDEX IF NOT EXISTS idx_investment_profiles_updated_at ON investment_profiles(updated_at);
 CREATE INDEX IF NOT EXISTS idx_risk_snapshots_user_id ON risk_snapshots(user_id);
 CREATE INDEX IF NOT EXISTS idx_price_alerts_user_id ON price_alerts(user_id);
 CREATE INDEX IF NOT EXISTS idx_price_alerts_triggered ON price_alerts(triggered);
 CREATE INDEX IF NOT EXISTS idx_weekly_plans_user_id ON weekly_plans(user_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_sent_user_symbol_type_time
+    ON alerts_sent(user_id, symbol, alert_type, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_recommendations_user_date
+    ON ai_recommendations(user_id, recommended_at DESC);
 
 RESET ROLE;

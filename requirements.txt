@@ -3,12 +3,16 @@ asyncpg==0.29.0
 python-telegram-bot[job-queue]==20.7
 yfinance==1.2.0
 pandas==2.2.2
+pandas-ta==0.3.14b0
 numpy==1.26.4
 pydantic-settings==2.2.1
 python-dotenv==1.0.1
 openai==1.35.3
 scipy>=1.13.0
 aiohttp>=3.9.0
+APScheduler==3.10.4
+fastapi==0.111.0
+alpaca-trade-api==3.0.2
 pytest==8.1.1
 pytest-asyncio==0.23.6
 pytest-mock==3.14.0

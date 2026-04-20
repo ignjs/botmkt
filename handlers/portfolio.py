@@ -5,8 +5,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from db import add_position, get_investment_profile, remove_position, save_risk_snapshot
+from services.ai_service import analyze_full_and_track_stock
+from services.backtester import run_backtest
 from services.optimizer import formatear_rebalanceo_para_telegram, optimizar_cartera
-from services.perplexity import analyze_portfolio, analyze_stock
+from services.perplexity import analyze_portfolio
 from services.planner import build_weekly_execution_plan
 from services.portfolio_service import build_portfolio_snapshot, build_stock_analysis_context
 from services.risk_engine import calcular_metricas_cartera, formatear_metricas_para_telegram
@@ -144,13 +146,30 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
+            await msg.reply_text("⏳ Analizando...")
             data, _, position = await build_stock_analysis_context(user_id, symbol)
             if not position:
                 await msg.reply_text(
                     f"ℹ️ No tienes {symbol} guardado en cartera. Haré análisis solo con datos de mercado."
                 )
 
-            ia = await analyze_stock(symbol, data)
+            backtest = await run_backtest(symbol)
+            data["backtest_summary"] = backtest["summary"]
+            await msg.reply_text(backtest["summary"], parse_mode="Markdown")
+
+            extra_context = (
+                f"Precio actual: {data.get('precio_actual')}\n"
+                f"Cambio 24h: {data.get('cambio_24h')}\n"
+                f"RSI: {data.get('rsi')}\n"
+                f"MACD: {data.get('macd')}\n"
+                f"{backtest['summary']}"
+            )
+            ia = await analyze_full_and_track_stock(
+                user_id,
+                symbol,
+                float(data.get("precio_actual", 0) or 0),
+                extra_context=extra_context,
+            )
             await msg.reply_text(f"🎯 **Análisis IA {symbol}**:\n{ia}", parse_mode="Markdown")
         except Exception as e:
             await msg.reply_text(f"No pude analizar {symbol}: {str(e) if str(e) else 'No cotizando'}")

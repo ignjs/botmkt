@@ -61,11 +61,16 @@ def build_stock_analysis_prompt(symbol: str, indicadores: dict) -> str:
             f"({indicadores.get('position_pl_pct', 0):+.2f}%)"
         )
 
+    backtest_context = "Backtest RSI+MACD: no disponible."
+    if indicadores.get("backtest_summary"):
+        backtest_context = f"Resumen backtest (últimos 2 años):\n{indicadores['backtest_summary']}"
+
     return load_prompt(
         "stock_analysis",
         symbol=symbol,
         stock_table=stock_table,
         position_context=position_context,
+        backtest_context=backtest_context,
     )
 
 
