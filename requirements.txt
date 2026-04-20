@@ -3,7 +3,6 @@ asyncpg==0.29.0
 python-telegram-bot[job-queue]==20.7
 yfinance==1.2.0
 pandas==2.2.2
-pandas-ta==0.3.14b0
 numpy==1.26.4
 pydantic-settings==2.2.1
 python-dotenv==1.0.1
