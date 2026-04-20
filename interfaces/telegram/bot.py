@@ -4,14 +4,24 @@ import re
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from config.settings import settings
-from handlers.alerts import alerta_handler, borrar_alerta_handler, mis_alertas_handler
+from handlers.ai_history import historial_ia_handler
+from handlers.alerts import alertas_handler, alerta_handler, borrar_alerta_handler, mis_alertas_handler
+from handlers.compare_handler import compare_handler
 from handlers.commands import start, stock_cmd
+from handlers.earnings_handler import earnings_conversation_handler
+from handlers.entry_handler import entry_handler
 from handlers.investment_profile import investment_profile_handler
+from handlers.metrics import metricas_handler
 from handlers.message import message_handler
+from handlers.portfolio_builder_handler import portfolio_builder_handler
 from handlers.portfolio import rebalancear_handler
+from handlers.risk_handler import risk_handler
+from handlers.screener_handler import screener_handler
+from handlers.trading import cuenta_handler, trading_intent_handler
 from interfaces.telegram.error_handler import global_error_handler
 from interfaces.telegram.handlers.portfolio_handler import PortfolioHandler
 from services.alert_checker import check_price_alerts
+from services.scheduler import scheduler_manager
 
 
 class TelegramBot:
@@ -20,6 +30,10 @@ class TelegramBot:
     def __init__(self, portfolio_handler: PortfolioHandler):
         self._portfolio_handler = portfolio_handler
         self._app = Application.builder().token(settings.telegram_token).build()
+        self._enable_scheduler = False
+
+    def enable_scheduler(self) -> None:
+        self._enable_scheduler = True
 
     async def run(self) -> None:
         portfolio_pattern = re.compile(
@@ -34,7 +48,17 @@ class TelegramBot:
         self._app.add_handler(CommandHandler("alerta", alerta_handler))
         self._app.add_handler(CommandHandler("mis_alertas", mis_alertas_handler))
         self._app.add_handler(CommandHandler("borrar_alerta", borrar_alerta_handler))
+        self._app.add_handler(CommandHandler("alertas", alertas_handler))
         self._app.add_handler(CommandHandler("rebalancear", rebalancear_handler))
+        self._app.add_handler(CommandHandler("metricas", metricas_handler))
+        self._app.add_handler(CommandHandler("historial_ia", historial_ia_handler))
+        self._app.add_handler(CommandHandler("screener", screener_handler))
+        self._app.add_handler(earnings_conversation_handler)
+        self._app.add_handler(CommandHandler("riesgo", risk_handler))
+        self._app.add_handler(CommandHandler("comparar", compare_handler))
+        self._app.add_handler(CommandHandler("armar", portfolio_builder_handler))
+        self._app.add_handler(CommandHandler("entrada", entry_handler))
+        self._app.add_handler(CommandHandler("cuenta", cuenta_handler))
 
         self._app.add_handler(CommandHandler("cartera", self._portfolio_handler.handle))
         self._app.add_handler(CommandHandler("analiza", self._portfolio_handler.handle))
@@ -47,6 +71,10 @@ class TelegramBot:
         self._app.add_handler(CommandHandler("cancelar", investment_profile_handler))
 
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, investment_profile_handler), group=0)
+        self._app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(!comprar|!vender)\b|^CONFIRMAR$"), trading_intent_handler),
+            group=1,
+        )
         self._app.add_handler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND & filters.Regex(portfolio_pattern),
@@ -62,6 +90,8 @@ class TelegramBot:
 
         await self._app.initialize()
         await self._app.start()
+        if self._enable_scheduler:
+            scheduler_manager.start(self._app.bot)
         await self._app.updater.start_polling()
         try:
             await asyncio.Event().wait()
@@ -70,6 +100,7 @@ class TelegramBot:
             pass
 
     async def shutdown(self) -> None:
+        scheduler_manager.shutdown()
         if self._app.updater and self._app.updater.running:
             await self._app.updater.stop()
         if self._app.running:
