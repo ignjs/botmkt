@@ -150,11 +150,6 @@ python main.py
 | `CONFIRMAR` | Ejecuta orden pendiente (expira en 60s) |
 | `/cuenta` | Resumen de cuenta y posiciones Alpaca |
 
-## API REST
-
-- Endpoint disponible: `GET /metrics/{telegram_user_id}`
-- Implementación: `api/app.py` + `api/endpoints.py`
-
 ## Base de datos
 
 Tablas principales:
