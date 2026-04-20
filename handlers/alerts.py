@@ -5,7 +5,7 @@ import re
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from db import add_price_alert, delete_price_alert, get_user_alerts
+from db import add_price_alert, delete_price_alert, get_recent_sent_alerts, get_user_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ async def alerta_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     target_price = float(match.group(3))
 
     try:
+        await msg.reply_text("⏳ Creando alerta de precio...")
         alert_id = await add_price_alert(user_id, symbol, condition, target_price)
         condition_es = "sube de" if condition == "above" else "baja de"
         await msg.reply_text(
@@ -68,6 +69,7 @@ async def mis_alertas_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
 
     try:
+        await msg.reply_text("⏳ Consultando tus alertas activas...")
         alerts = await get_user_alerts(user_id)
         if not alerts:
             await msg.reply_text(
@@ -111,6 +113,7 @@ async def borrar_alerta_handler(update: Update, context: ContextTypes.DEFAULT_TY
     alert_id = int(parts[1])
 
     try:
+        await msg.reply_text("⏳ Eliminando alerta...")
         deleted = await delete_price_alert(user_id, alert_id)
         if deleted:
             await msg.reply_text(f"✅ Alerta #{alert_id} eliminada.")
@@ -119,3 +122,33 @@ async def borrar_alerta_handler(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.exception("Error en borrar_alerta_handler: %s", e)
         await msg.reply_text("❌ No pude eliminar la alerta. Intenta nuevamente.")
+
+
+async def alertas_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show proactive alerts sent in last 24h to the current user."""
+    msg = update.message
+    user_id = update.effective_user.id
+
+    try:
+        await msg.reply_text("⏳ Consultando alertas proactivas enviadas...")
+        alerts = await get_recent_sent_alerts(user_id, hours=24)
+        if not alerts:
+            await msg.reply_text("No tienes alertas proactivas enviadas en las últimas 24h.")
+            return
+
+        labels = {
+            "stop_loss": "Stop-Loss alcanzado",
+            "rsi_extremo": "RSI extremo",
+            "volumen_anormal": "Volumen anormal",
+        }
+
+        lines = ["🚨 *Alertas enviadas (últimas 24h)*"]
+        for alert in alerts:
+            label = labels.get(alert["alert_type"], alert["alert_type"])
+            lines.append(
+                f"- `{alert['symbol']}` · {label} · {alert['sent_at'].strftime('%Y-%m-%d %H:%M')}"
+            )
+        await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en alertas_handler: %s", e)
+        await msg.reply_text("❌ No pude obtener el historial de alertas. Intenta nuevamente.")

@@ -28,3 +28,15 @@ class MarketDataUnavailableError(BotMKTError):
 
 class DatabaseError(BotMKTError):
     """Error de acceso a base de datos."""
+
+
+class AIAnalysisError(BotMKTError):
+    """Error al generar análisis con IA - timeout o respuesta inválida."""
+
+
+class InvalidStrategyError(BotMKTError):
+    """Estrategia de inversión no reconocida."""
+
+
+class MissingReportTextError(BotMKTError):
+    """El usuario no pegó el texto del earnings report."""

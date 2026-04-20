@@ -8,7 +8,9 @@ from application.use_cases.add_position import AddPositionUseCase
 from application.use_cases.get_portfolio import GetPortfolioUseCase
 from application.use_cases.remove_position import RemovePositionUseCase
 from db import get_investment_profile, save_risk_snapshot
-from services.perplexity import analyze_portfolio, analyze_stock
+from services.ai_service import analyze_full_and_track_stock
+from services.backtester import run_backtest
+from services.perplexity import analyze_portfolio
 from services.planner import build_weekly_execution_plan
 from services.portfolio_service import build_portfolio_snapshot, build_stock_analysis_context
 from services.risk_engine import calcular_metricas_cartera, formatear_metricas_para_telegram
@@ -68,6 +70,7 @@ class PortfolioHandler:
             return
 
         if text == "/cartera":
+            await message.reply_text("⏳ Analizando tu cartera...")
             snap = await build_portfolio_snapshot(user_id)
             if not snap["detalle"]:
                 await message.reply_text("No tienes posiciones en tu cartera todavía.")
@@ -97,6 +100,7 @@ class PortfolioHandler:
                 )
                 return
 
+            await message.reply_text("⏳ Generando tu plan semanal...")
             result = await build_weekly_execution_plan(user_id)
             await message.reply_text(result["plan_markdown"], parse_mode="Markdown")
             return
@@ -114,6 +118,7 @@ class PortfolioHandler:
             analizar_cartera_completa = target_lower in ANALYZE_PORTFOLIO_TARGETS
 
             if analizar_cartera_completa:
+                await message.reply_text("⏳ Analizando tu cartera completa...")
                 snap = await build_portfolio_snapshot(user_id)
                 if not snap["detalle"]:
                     await message.reply_text("No tienes posiciones en tu cartera.")
@@ -129,13 +134,30 @@ class PortfolioHandler:
                 return
 
             try:
+                await message.reply_text("⏳ Analizando activo y contexto de mercado...")
                 data, _, position = await build_stock_analysis_context(user_id, symbol)
                 if not position:
                     await message.reply_text(
                         f"ℹ️ No tienes {symbol} guardado en cartera. Haré análisis solo con datos de mercado."
                     )
 
-                ia = await analyze_stock(symbol, data)
+                backtest = await run_backtest(symbol)
+                data["backtest_summary"] = backtest["summary"]
+                await message.reply_text(backtest["summary"], parse_mode="Markdown")
+
+                extra_context = (
+                    f"Precio actual: {data.get('precio_actual')}\n"
+                    f"Cambio 24h: {data.get('cambio_24h')}\n"
+                    f"RSI: {data.get('rsi')}\n"
+                    f"MACD: {data.get('macd')}\n"
+                    f"{backtest['summary']}"
+                )
+                ia = await analyze_full_and_track_stock(
+                    user_id,
+                    symbol,
+                    float(data.get("precio_actual", 0) or 0),
+                    extra_context=extra_context,
+                )
                 await message.reply_text(f"🎯 **Análisis IA {symbol}**:\n{ia}", parse_mode="Markdown")
             except Exception as e:
                 await message.reply_text(f"No pude analizar {symbol}: {str(e) if str(e) else 'No cotizando'}")

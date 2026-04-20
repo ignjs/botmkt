@@ -3,11 +3,14 @@ import logging
 from telegram.ext import ContextTypes
 
 from domain.exceptions import (
+    AIAnalysisError,
     DatabaseError,
     InvalidPriceError,
     InvalidQuantityError,
+    InvalidStrategyError,
     InvalidSymbolError,
     MarketDataUnavailableError,
+    MissingReportTextError,
     PositionNotFoundError,
 )
 
@@ -29,6 +32,12 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
         msg = "⚠️ No se pudo obtener datos de mercado. Intenta en unos minutos"
     elif isinstance(error, DatabaseError):
         msg = "🔴 Error de base de datos. El equipo ha sido notificado"
+    elif isinstance(error, AIAnalysisError):
+        msg = "⚠️ El análisis tardó demasiado. Intenta nuevamente en un momento."
+    elif isinstance(error, InvalidStrategyError):
+        msg = "❌ Estrategia no válida. Usa: growth, valor, dividendos o momentum."
+    elif isinstance(error, MissingReportTextError):
+        msg = "❌ No recibí el texto del reporte. Usa /earnings EMPRESA y luego pega el texto."
     else:
         logger.exception("Error no manejado", exc_info=error)
         msg = "❌ Ocurrió un error inesperado. Intenta nuevamente"
