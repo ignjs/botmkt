@@ -45,16 +45,21 @@ class PortfolioHandler:
         normalized = text.lower()
         user_id = update.effective_user.id
 
+        import logging
+        logger = logging.getLogger("portfolio_handler")
         if text.startswith("+"):
             parts = text[1:].strip().split()
             if len(parts) != 3:
+                logger.info("Enviando mensaje: Formato inválido. Usa: +AAPL 10 170")
                 await message.reply_text("Formato inválido. Usa: +AAPL 10 170")
                 return
             symbol, qty, price = parts
             if not SYMBOL_PATTERN.match(symbol.upper()):
+                logger.info("Enviando mensaje: Símbolo inválido.")
                 await message.reply_text("Símbolo inválido.")
                 return
             result = await self._add.execute(user_id, symbol, float(qty), float(price))
+            logger.info(f"Enviando mensaje: ✅ {result.symbol} agregado ({Decimal(result.quantity):,.2f} @ {result.avg_buy_price.amount:,.2f})")
             await message.reply_text(
                 f"✅ {result.symbol} agregado ({Decimal(result.quantity):,.2f} @ {result.avg_buy_price.amount:,.2f})"
             )
@@ -63,16 +68,21 @@ class PortfolioHandler:
         if text.startswith("-"):
             symbol = text[1:].strip().upper()
             if not symbol:
+                logger.info("Enviando mensaje: Formato inválido. Usa: -AAPL")
                 await message.reply_text("Formato inválido. Usa: -AAPL")
                 return
             await self._remove.execute(user_id, symbol)
+            logger.info(f"Enviando mensaje: ✅ {symbol} eliminado de tu cartera")
             await message.reply_text(f"✅ {symbol} eliminado de tu cartera")
             return
 
         if text == "/cartera":
+            logger.info("Enviando mensaje: ⏳ Analizando tu cartera...")
             await message.reply_text("⏳ Analizando tu cartera...")
             snap = await build_portfolio_snapshot(user_id)
+            logger.info(f"Snapshot de cartera: {snap}")
             if not snap["detalle"]:
+                logger.info("Enviando mensaje: No tienes posiciones en tu cartera todavía.")
                 await message.reply_text("No tienes posiciones en tu cartera todavía.")
                 return
 
@@ -83,11 +93,12 @@ class PortfolioHandler:
                 texto += f"\n\n{formatear_metricas_para_telegram(metricas)}"
                 try:
                     await save_risk_snapshot(user_id, metricas)
-                except Exception:
-                    pass
-            except Exception:
-                pass
+                except Exception as e:
+                    logger.warning(f"Error guardando risk snapshot: {e}")
+            except Exception as e:
+                logger.warning(f"Error calculando métricas de cartera: {e}")
 
+            logger.info(f"Enviando mensaje de cartera: {texto}")
             await message.reply_text(texto, parse_mode="Markdown")
             return
 
