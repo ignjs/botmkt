@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     """Runtime settings loaded from environment."""
 
     telegram_token: str
+    project_id: str = ""
     database_url: str
 
     openai_api_key: str = ""
