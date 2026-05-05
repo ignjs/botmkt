@@ -31,13 +31,20 @@ class TelegramBot:
         self._portfolio_handler = portfolio_handler
         self._app = Application.builder().token(settings.telegram_token).build()
         self._enable_scheduler = False
+        self._handlers_registered = False
+        self._initialized = False
+        self._started = False
+        self._scheduler_started = False
 
     def enable_scheduler(self) -> None:
         self._enable_scheduler = True
 
-    async def run(self) -> None:
+    def _register_handlers(self) -> None:
+        if self._handlers_registered:
+            return
+
         portfolio_pattern = re.compile(
-            r'^(\+|-|/cartera\b|/analiza\b|/plan_semana\b|analiza mi cartera|plan semanal|que deberia hacer esta semana|qué debería hacer esta semana|dame mi plan de cartera)',
+            r'^(\\+|-|/cartera\\b|/analiza\\b|/plan_semana\\b|analiza mi cartera|plan semanal|que deberia hacer esta semana|qué debería hacer esta semana|dame mi plan de cartera)',
             re.IGNORECASE,
         )
 
@@ -72,7 +79,7 @@ class TelegramBot:
 
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, investment_profile_handler), group=0)
         self._app.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(!comprar|!vender)\b|^CONFIRMAR$"), trading_intent_handler),
+            MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(!comprar|!vender)\\b|^CONFIRMAR$"), trading_intent_handler),
             group=1,
         )
         self._app.add_handler(
@@ -88,21 +95,40 @@ class TelegramBot:
         if job_queue:
             job_queue.run_repeating(check_price_alerts, interval=300, first=60)
 
-        await self._app.initialize()
-        await self._app.start()
-        if self._enable_scheduler:
+        self._handlers_registered = True
+
+    async def start_webhook_mode(self) -> None:
+        self._register_handlers()
+        if not self._initialized:
+            await self._app.initialize()
+            self._initialized = True
+        if not self._started:
+            await self._app.start()
+            self._started = True
+        if self._enable_scheduler and not self._scheduler_started:
             scheduler_manager.start(self._app.bot)
-        await self._app.updater.start_polling()
+            self._scheduler_started = True
+
+    async def process_webhook_update(self, update) -> None:
+        await self._app.process_update(update)
+
+    async def run(self) -> None:
+        await self.start_webhook_mode()
+        # No polling, solo webhooks
+        # El procesamiento de updates se hace vía Flask en main.py
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
-            # Normal during debugger stop or process shutdown.
             pass
 
     async def shutdown(self) -> None:
-        scheduler_manager.shutdown()
+        if self._scheduler_started:
+            scheduler_manager.shutdown()
+            self._scheduler_started = False
         if self._app.updater and self._app.updater.running:
             await self._app.updater.stop()
         if self._app.running:
             await self._app.stop()
+            self._started = False
         await self._app.shutdown()
+        self._initialized = False

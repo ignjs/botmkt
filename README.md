@@ -7,7 +7,7 @@
 ![asyncpg](https://img.shields.io/badge/asyncpg-0.29.0-2E8B57)
 ![yfinance](https://img.shields.io/badge/yfinance-1.2.0-0A7C59)
 
-BotMKT es un bot de Telegram para análisis financiero en español, orientado a inversionistas que buscan disciplina de cartera con apoyo de IA y reglas personalizadas. El bot permite gestionar posiciones, definir perfil de inversión, recibir un plan semanal accionable, crear alertas de precio, calcular métricas cuantitativas y ejecutar órdenes en Alpaca (paper/live con confirmación explícita). No ejecuta órdenes reales en brokers ni opera cuentas de inversión reales.
+BotMKT es un bot de Telegram para análisis financiero en español, orientado a inversionistas que buscan disciplina de cartera con apoyo de IA y reglas personalizadas. El bot permite gestionar posiciones, definir perfil de inversión, recibir un plan semanal accionable, crear alertas de precio, calcular métricas cuantitativas y ejecutar órdenes en Alpaca (paper/live con confirmación explícita). Está preparado para ejecución serverless con Webhooks (Flask + Cloud Run). No ejecuta órdenes reales en brokers ni opera cuentas de inversión reales.
 
 ---
 
@@ -33,7 +33,7 @@ BotMKT es un bot de Telegram para análisis financiero en español, orientado a 
 ## Estructura del proyecto
 
 ```text
-main.py                         # Entrypoint del bot de Telegram y scheduler de alertas
+main.py                         # Entrypoint Flask (webhook), runtime async persistente e integración Telegram
 config/                         # Settings y container
 db/                             # Acceso DB async + schema bootstrap
 handlers/                       # Handlers de Telegram
@@ -51,7 +51,7 @@ README.md                       # Documentación principal
 
 | Módulo | Responsabilidad |
 |---|---|
-| main.py | Construye Application de Telegram, registra handlers, programa chequeo de alertas cada 300s |
+| main.py | Expone `/webhook` y `/healthz`, inicializa TelegramBot en modo webhook y procesa updates en runtime async persistente |
 | db/ | Conexión asyncpg, validación DATABASE_URL, creación de tablas e índices, CRUD multiusuario |
 | handlers/ | Gestión de posiciones, perfil, alertas, mensajes libres, rebalanceo |
 | services/ | Métricas de riesgo, optimización, integración IA, reglas, plan semanal, market data |
@@ -94,10 +94,24 @@ LOG_LEVEL=INFO
 ALPHA_VANTAGE_KEY=tu_alpha_vantage_key
 ```
 
-Iniciar bot:
+Iniciar bot local (modo webhook):
 
 ```bash
 python main.py
+```
+
+Exponer el endpoint local y registrar webhook en Telegram:
+
+```bash
+ngrok http 8080
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_TOKEN>/setWebhook" \
+   -d "url=https://<tu_subdominio_ngrok>.ngrok-free.app/webhook"
+```
+
+Verificar estado del webhook:
+
+```bash
+curl "https://api.telegram.org/bot<TELEGRAM_TOKEN>/getWebhookInfo"
 ```
 
 ---
@@ -106,7 +120,7 @@ python main.py
 
 | Variable | Descripción | Requerida | Ejemplo |
 |---|---|---|---|
-| TELEGRAM_TOKEN | Token del bot de Telegram usado por main.py | Sí | 123456789:ABCDEF |
+| TELEGRAM_TOKEN | Token del bot de Telegram usado por el runtime webhook | Sí | 123456789:ABCDEF |
 | PERPLEXITY_API_KEY | API key para análisis IA | Sí | pplx-abc123 |
 | DATABASE_URL | URL PostgreSQL para asyncpg | Sí | postgresql://user:pass@localhost:5432/botmkt |
 | LOG_LEVEL | Nivel de logging global | No | INFO |
@@ -185,7 +199,7 @@ python main.py
 
 #### Triggers de lenguaje natural
 
-Entradas detectadas en main.py y handlers/message.py:
+Entradas detectadas en handlers/message.py y handlers específicos:
 
 | Trigger detectado | Resultado |
 |---|---|
@@ -219,7 +233,7 @@ Respuestas especiales soportadas durante edición: mantener, igual, skip, omitir
 
 ## Base de datos
 
-El esquema se crea automáticamente al iniciar el bot (init_pool en post_init de main.py) o manualmente con schema.sql.
+El esquema se crea automáticamente al inicializar el contenedor (Container.build) o manualmente con schema.sql.
 
 | Tabla | Columnas principales | Descripción |
 |---|---|---|
@@ -256,7 +270,8 @@ PYTHONPATH=. pytest -q \
 ## Troubleshooting y notas de operación
 
 - **DATABASE_URL no configurada**: ValueError al iniciar. Definir en .env y reiniciar.
-- **El bot no responde**: Revisar TELEGRAM_TOKEN, proceso activo y conectividad.
+- **El bot no responde**: Revisar TELEGRAM_TOKEN, webhook activo (`getWebhookInfo`), proceso activo y conectividad.
+- **RuntimeError: Event loop is closed**: Verificar que se está usando la versión actual con runtime async persistente en `main.py` (no cerrar loop por request).
 - **yfinance no retorna datos**: Verificar símbolo, sufijo de mercado y fallback ALPHA_VANTAGE_KEY.
 - **El esquema no se crea**: Revisar permisos, ejecutar schema.sql manualmente si es necesario.
 - **scipy.optimize no disponible**: Activar entorno y reinstalar dependencias.
@@ -267,14 +282,21 @@ Scheduler proactivo: cada 15 minutos en días hábiles dentro de ventana de merc
 
 ## Despliegue
 
-### Railway (app bot)
-1. Crear nuevo proyecto en Railway conectado al repositorio.
-2. Configurar variables de entorno: TELEGRAM_TOKEN, PERPLEXITY_API_KEY, DATABASE_URL, LOG_LEVEL.
-3. Comando de inicio:
-   ```bash
-   python main.py
-   ```
-4. Validar logs de inicio y pool.
+### Google Cloud Run (recomendado)
+1. Construir imagen y desplegar el servicio en Cloud Run exponiendo puerto `8080`.
+2. Configurar variables de entorno: `TELEGRAM_TOKEN`, `PERPLEXITY_API_KEY`, `DATABASE_URL`, `LOG_LEVEL` y opcionales.
+3. Configurar el webhook apuntando a `https://<servicio>.a.run.app/webhook`.
+4. Verificar salud en `/healthz` y revisar logs de inicialización y procesamiento de updates.
+
+Ejemplo de registro de webhook post-deploy:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_TOKEN>/setWebhook" \
+   -d "url=https://<tu-servicio>.a.run.app/webhook"
+```
+
+### Railway (legacy)
+Si usas Railway, mantén HTTPS público y registra el endpoint `/webhook` en Telegram.
 
 ### Supabase (solo base de datos)
 1. Crear proyecto PostgreSQL en Supabase.
