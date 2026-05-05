@@ -3,12 +3,17 @@ import pytest
 from services.broker_service import get_account_info, get_open_positions, place_order
 
 
+class _MockEnumValue:
+    def __init__(self, v):
+        self.value = v
+
+
 class DummyOrder:
     id = "abc123"
     symbol = "AAPL"
     qty = "5"
-    side = "buy"
-    status = "filled"
+    side = _MockEnumValue("buy")
+    status = _MockEnumValue("filled")
     filled_avg_price = "210.20"
 
 
@@ -29,13 +34,16 @@ class DummyPosition:
 
 
 class DummyClient:
-    def submit_order(self, **kwargs):
+    def submit_order(self, order_request):
+        from alpaca.trading.requests import MarketOrderRequest
+
+        assert isinstance(order_request, MarketOrderRequest)
         return DummyOrder()
 
     def get_account(self):
         return DummyAccount()
 
-    def list_positions(self):
+    def get_all_positions(self):
         return [DummyPosition("AAPL", "5", "200", "1050", "50")]
 
 
