@@ -44,7 +44,7 @@ class TelegramBot:
             return
 
         portfolio_pattern = re.compile(
-            r'^(\\+|-|/cartera\\b|/analiza\\b|/plan_semana\\b|analiza mi cartera|plan semanal|que deberia hacer esta semana|qué debería hacer esta semana|dame mi plan de cartera)',
+            r'^(\+|-|/cartera\b|/analiza\b|/plan_semana\b|analiza mi cartera|plan semanal|que deberia hacer esta semana|qué debería hacer esta semana|dame mi plan de cartera)',
             re.IGNORECASE,
         )
 
@@ -79,7 +79,7 @@ class TelegramBot:
 
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, investment_profile_handler), group=0)
         self._app.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(!comprar|!vender)\\b|^CONFIRMAR$"), trading_intent_handler),
+            MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(!comprar|!vender)\b|^CONFIRMAR$"), trading_intent_handler),
             group=1,
         )
         self._app.add_handler(
