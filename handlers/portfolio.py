@@ -52,8 +52,8 @@ async def portfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("Símbolo inválido. Ejemplos válidos: IAM.SN, ^IPSA, USDCLP=X")
                 return
 
-            qty_value = float(qty)
-            price_value = float(price)
+            qty_value = float(qty.replace(',', '.'))
+            price_value = float(price.replace(',', '.'))
             if qty_value <= 0 or price_value <= 0:
                 raise ValueError("Cantidad y precio deben ser mayores a 0")
 

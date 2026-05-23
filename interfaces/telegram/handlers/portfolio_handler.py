@@ -58,7 +58,7 @@ class PortfolioHandler:
                 logger.info("Enviando mensaje: Símbolo inválido.")
                 await message.reply_text("Símbolo inválido.")
                 return
-            result = await self._add.execute(user_id, symbol, float(qty), float(price))
+            result = await self._add.execute(user_id, symbol, float(qty.replace(',', '.')), float(price.replace(',', '.')))
             logger.info(f"Enviando mensaje: ✅ {result.symbol} agregado ({Decimal(result.quantity):,.2f} @ {result.avg_buy_price.amount:,.2f})")
             await message.reply_text(
                 f"✅ {result.symbol} agregado ({Decimal(result.quantity):,.2f} @ {result.avg_buy_price.amount:,.2f})"
